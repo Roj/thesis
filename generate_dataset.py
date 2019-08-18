@@ -96,19 +96,28 @@ for fn in filenames:
 
     # Generate the graph.
     protein.discard_ligands()
-    protein.generate_structure(lambda row: row["full_id"][4][0] == "CA")
+    structure = protein.generate_structure(lambda row: row["full_id"][4][0] == "CA")
 
     perseus = Perseus()
     perseus.execute_persistent_hom(protein)
 
     structure_model = graph_models.StructureGraphGenerator()
-    protein.generate_graph(structure_model, {"step":389})
+    protein.generate_graph(structure_model,
+        {"step": structure.persistent_hom_params["b3_step"]})
+
+    # Depth features
+    depths, _ = structure.calculate_depth(protein.graph)
+    for node_idx, depth in depths.items():
+        protein.graph.nodes[node_idx]["depth"] = depth
+
+    # Rest of features
     structure_model.add_features(protein.df, columns = [
         "bfactor", "score", "color",
         "color_confidence_interval_high", "color_confidence_interval_low",
         "score_confidence_interval_high", "score_confidence_interval_low",
         "resname", "coord", "distance"
     ])
+
     dest_pickle = "graphs/{}.pkl".format(protein.pdb.id)
     nx.write_gpickle(structure_model.G, dest_pickle)
     print("Exported graph to {}".format(dest_pickle))
