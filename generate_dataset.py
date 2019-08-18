@@ -88,6 +88,11 @@ for fn in filenames:
     # Sanity check
     if min(protein.df[protein.df.resname != "ATP"].distance) > 4.0:
         print("WARNING: no atoms are linked to ligand")
+        continue
+
+    # Only keep chains that are connected to the ligand.
+    chains_with_ligand = protein.df[protein.df.distance <= 6.0].chain.unique()
+    protein.select_chains(chains_with_ligand)
 
     # Generate the graph.
     protein.discard_ligands()
