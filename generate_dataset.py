@@ -44,7 +44,6 @@ else:
 if any(map(lambda fn: fn is None, filenames)):
     print("Some files could not be downloaded")
 
-
 # Searching a bit I didn't find a way to get a chain list or get all
 # conservation features for a specific protein, so we need to look up
 # what chains it actually has by reading the PDB file.
@@ -77,6 +76,7 @@ for fn in filenames:
     # Distance features
     protein.df = protein.df[~protein.df.coord.isnull()]
     ATP_coords = protein.df[protein.df.resname == "ATP"].coord.to_list()
+    print("Found {} ATP atoms".format(len(ATP_coords)))
     if len(ATP_coords) == 0:
         # This may happen because of an oddly formatted PDB file which Bio cannot read
         # correctly.
@@ -85,8 +85,12 @@ for fn in filenames:
     protein.df["distance"] = protein.df.coord.apply(
         lambda atom: min(map(lambda atp_atom: np.linalg.norm(atom-atp_atom), ATP_coords))
     )
+    protein.discard_ligands()
     # Sanity check
-    if min(protein.df[protein.df.resname != "ATP"].distance) > 4.0:
+    protein.df = protein.df.loc[
+            protein.df.apply(lambda row: row["full_id"][4][0] == "CA", axis=1),:].reset_index(drop=True)
+
+    if min(protein.df.distance) >= 6.0:
         print("WARNING: no atoms are linked to ligand")
         continue
 
