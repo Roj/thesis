@@ -44,6 +44,7 @@ else:
 if any(map(lambda fn: fn is None, filenames)):
     print("Some files could not be downloaded")
 
+#filenames = ["data/3KEU.pdb", "data/3ULE.pdb", "dlata/4DQW.pdb"]
 # Searching a bit I didn't find a way to get a chain list or get all
 # conservation features for a specific protein, so we need to look up
 # what chains it actually has by reading the PDB file.
@@ -57,9 +58,9 @@ for fn in filenames:
     # get_chains might have repeated IDs, so we use a set generator.
     chains = list({chain.id for chain in protein.pdb.get_chains()})
     id_chain_dict = {protein.pdb.id : chains}
-    dw = ConsurfDBDownloader(id_chain_dict, base_path="data/consurf/")
 
     if not args.no_consurf:
+        dw = ConsurfDBDownloader(id_chain_dict, base_path="data/consurf/")
         print("Downloading conservation data for Protein {}".format(protein.pdb.id))
         try:
             consurf_filenames = dw.request_and_write()
@@ -77,6 +78,9 @@ for fn in filenames:
     protein.df = protein.df[~protein.df.coord.isnull()]
     ATP_coords = protein.df[protein.df.resname == "ATP"].coord.to_list()
     print("Found {} ATP atoms".format(len(ATP_coords)))
+    if(len(ATP_coords) > 200):
+        print("Skipping it because it would fry my laptop")
+        continue
     if len(ATP_coords) == 0:
         # This may happen because of an oddly formatted PDB file which Bio cannot read
         # correctly.
