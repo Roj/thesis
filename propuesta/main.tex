@@ -62,7 +62,7 @@
 \kierunek{XXXXXX}
 \specjalnosc{XXXXXX}
 \title{
-    Predicción de sitios de unión entre ligandos y proteínas \\
+    Predicción de sitios de unión en proteínas \\
     usando redes neuronales de grafos
 }
 \author{\{Joaquin Torre Zaffaroni\}}
@@ -123,36 +123,42 @@ tratamiento contra la sífilis.
 Como es conocido, el descubrimiento de la penicilina fue por accidente. El proceso
 de sistematizar el entendimiento de qué compuestos podrían servir para tratar ciertas 
 enfermedades se llama \textit{descubrimiento de drogas}. El enfoque más común en
-la actualidad es el de \textit{farmacología inversa}: se identifican potenciales
-proteínas que son fundamentales para la patología, se buscan compuestos que modulen
+la actualidad es el de \textit{farmacología inversa}: se identifican 
+proteínas que están asociadas al comportamiento de la patología, 
+se buscan compuestos que modulen
 (reduzcan) su actividad y luego se hacen pruebas \textit{in vivo}. El proceso de
 probar si una molécula pequeña puede modular la actividad de una proteína se
-conoce como \textit{screening}.
+conoce como \textit{screening} (cribaje), y a esas proteínas se las conoce como
+\textit{blancos terapéuticos}.
 
 Una forma automatizada de hacer esto es por medio de \textit{virtual screening}.
-Esta técnica permite predecir la probabilidad de unión entre una droga y el 
-receptor\footnote{el receptor suele ser un aminoácido o un %este footnote me parece una caca
-grupo de átomos} de una proteína o una enzima
+Esta técnica permite predecir la capacidad de unión entre una droga y el 
+receptor de una proteína.
 En este trabajo nos enfocamos en un problema particular de esta técnica,
 que es la evaluación de los lugares de la proteína donde se puede
 unir un ligando particular (\textit{binding site prediction}). Por ejemplo,
 no estamos determinando qué orientación tendrá el compuesto en la cavidad
-(que se resuelve con técnicas de \textit{docking})
+(que se resuelve con técnicas de \textit{docking}), ni la afinidad
+particular de una proteína contra distintas drogas. Puntualmente,
+utilizaremos métodos de aprendizaje automático para resolver este problema.
 
 %rever si este párrafo va acá o en otra sección
 
-Una forma de predecir los sitios de unión es a través de métodos de aprendizaje
-automático. Los conjuntos de datos son las proteínas, los compuestos moleculares
-pequeños y la información de unión entre ambos. Las proteínas se
-pueden modelar como secuencias de aminoácidos, pero 
-también se pueden representar con su estructura 3D. En principio, se podría deducir
-de la secuencia, pero 
-es conocido que el mapeo automático a la
-estructura no es trivial --- las fuerzas químicas no covalentes
-doblan la estructura generando configuraciones de menor energía. Usaremos entonces
-estructuras conseguidas experimentalmente, a través de técnicas como la cristalografía
-de rayos X, que están disponibles en el \textit{Worldwide Protein Data Bank}\footnote{http//wwpdb.org},
-aunque también puede haber \textit{features} de otras fuentes.
+Para utilizar cualquier método de \textit{machine learning} es necesario
+tener una manera de representar a los datos. Las proteínas, en principio,
+se pueden modelar como secuencias de aminoácidos. Conociendo la secuencia
+es posible determinar la estructura secundaria (plegamientos tridimensionales
+entre aminoácidos cercanos) y la estructura terciaria (las posiciones
+tridimensionales de todos los átomos); dado esto, es natural pensar que
+la mejor forma de representar a la proteína es con su secuencia.
+Sin embargo, el mapeo automático de la secuencia a la
+estructura no es trivial. Como el problema de sitios de unión es un
+fenómeno en el espacio, es mejor representar la estructura terciaria 
+(las posiciones) y no la estructura primaria (la secuencia).
+Como datos usaremos estructuras conseguidas experimentalmente, a través de
+técnicas como la cristalografía de rayos X, que están disponibles en el 
+\textit{Protein Data Bank}\footnote{http//wwpdb.org}, aunque también puede 
+haber \textit{features} de otras fuentes.
 
 \section{Contexto y estado del arte}
 \subsection{Redes neuronales de grafos}
@@ -166,25 +172,24 @@ ocultas}. Por ejemplo, un perceptrón multicapa tiene capas con la siguiente for
 \endgroup
 
 
-donde $h_n$ es la capa enésima de dimensión $N$, $h^{n+1}$ es la capa siguiente de
+donde $h^n$ es la capa enésima de dimensión $N$, $h^{n+1}$ es la capa siguiente de
 dimensión $M$, $W$ es una matriz de dimensión $M\times N$, $b$ es un vector de
 sesgo y $\bar\sigma$ es la función de activación. Lo fundamental es que las
 capas siguientes se relacionan con las anteriores según una función diferenciable
 (para poder entrenar al modelo con \textit{backpropagation}). Por lo general la
 capa final es \textit{softmax} \cite{sfunsupervised}, que es un predictor 
-multiclase basado en hiperplanos.
-Como tal, el problema que le llega a la última capa debe ser linealmente separable.
-Se entiende, entonces, que el trabajo de las capas anteriores es representar a los
-datos de manera que se cumpla esa condición \cite{nielsen2015neural}. %colah??
+multiclase basado en hiperplanos. Como tal, las capas anteriores 
+resuelven el problema de representación \cite{nielsen2015neural}.
 
-Según el tipo de problema, puede ser más útil cambiar la forma de algunas o todas
-las capas con ese objetivo de representar bien a los datos. De ahí, entonces, que
-en redes neuronales que trabajan con imágenes se utilicen capas convolucionales 
-y capas de \textit{pooling} \cite{alexnet}. En otros casos, es necesario también cambiar la
-arquitectura de la red. En el caso de texto, que es un problema de longitud variable,
+Por eso, en redes neuronales que trabajan con imágenes se utilizan capas convolucionales 
+y capas de \textit{pooling} \cite{alexnet}. En el caso de texto, que es un problema de
+longitud variable,
 es necesario que el modelo vaya procesando por cada caracter o palabra y manteniendo
 un estado interno a lo largo de la secuencia: la entrada a la red son, entonces,
 el elemento actual y el estado anterior. %algún paper de secuencia o colah
+
+
+
 
 El caso de grafos es una generalización de los casos anteriores y por tanto hereda
 los requerimientos de texto e imágenes. Como los textos, los grafos son de tamaño
@@ -204,10 +209,18 @@ o hacer una clasificación por cada nodo. En nuestro caso, es determinar cuáles
 de los nodos (aminoácidos) de la proteína se van a unir con el ligando. Este último
 caso admite una subdivisión adicional: en el caso \textbf{transductivo}, algunos
 nodos del grafo se ocultan en la parte de entrenamiento y se verifican en el test; en el
-caso \textbf{inductivo} los grafos de entrenamiento y test son distintos \cite{GAT}. Es%citar paper de GAT
+caso \textbf{inductivo} los grafos de entrenamiento y test son distintos \cite{GAT}. Es %citar paper de GAT
 evidente que en el caso inductivo hay una dificultad adicional: la estructura
 de los grafos puede ser distinta, por lo que filtros que dependan de particularidades %coso que decía que no funcionaba el laplaciano
 del conjunto de entrenamiento no funcionarán para predecir nuevos grafos. %citar datasets que sean así+paper? puede ser
+
+\begin{figure}
+\centering
+  \includegraphics[width=0.8\linewidth]{img/img_texto_imagen_grafo.png}
+  \caption{Los casos de procesamiento de texto y de imágenes se pueden pensar como instancias particulares del problema de grafos.}
+  \label{fig:boat1}
+\end{figure}
+
 
 Sobre los tipos de modelos de redes neuronales sobre grafos, podemos dividir el
 análisis en los siguientes grupos: 
@@ -265,15 +278,11 @@ de mayor orden; en la primera capa, cada píxel del \textit{feature map} corresp
 vecindario de la imagen original, en la segunda, a un vecindario de vecindarios, etc. \cite{lecun1998gradient}
 Las neuronas superiores tienen información global de la imagen.
 
-En el caso de grafos estamos interesados en obtener información global del grafo en
-representaciones superiores, además de propagarla por los nodos de la red. De la misma manera
-que en las imágenes un objeto puede estar en cualquier parte del plano, los grafos admiten
-muchas representaciones distintas (problema del isomorfismo de grafos) y es necesario que el
-modelo pueda ser invariante a ellas. Sin embargo, la ecuación de las capas convolucionales
-para imágenes no se puede aplicar para grafos, ya que el vecindario de un nodo es variable.
-De hecho, tampoco hay un \textit{orden} en los grafos. Para cada píxel que no esté en el borde
-de una imagen es posible hallar su adyacente izquierdo, superior, derecho o inferior. No
-existe esta noción en los grafos.
+En el caso de grafos estamos interesados en lo mismo, obtener información global del grafo en
+representaciones superiores. Pero no es directa la generalización de la convolución -- 
+en un grafo, el vecindario de un nodo es variable. No hay un \textit{orden} en los grafos
+como lo había en imágenes. Para poder definir la convolución de una señal en un grafo se utiliza
+la generalización discreta del laplaciano continuo.
 
 El laplaciano combinatorio de un grafo se define como $L(G) = D-A$, donde $D$ es la matriz
 de grados y $A$ la matriz de adyacencia. Si además definimos una señal sobre el grafo ---
@@ -298,7 +307,7 @@ de Laplace forman la base para la transformada de Fourier, se puede hallar la tr
 de Fourier del grafo utilizando los autovectores de $L(G)$ \cite{graphfourier}. 
 
 Esta analogía permite reutilizar el resultado clásico de señales continuas: 
-$\mathcal{F}\{f*g\} = \mathcal{F}\cdot \mathcal{G}$ (la transformada de la convolución es la
+$\mathcal{F}\{f*g\} = \mathcal{F}\{f}}\cdot \mathcal{F}\{g\}$ (la transformada de la convolución es la
 multiplicación de las transformadas). Para poder hacer
 convoluciones en grafos simplemente podemos hacerlo en el dominio de la
 frecuencia, a través del laplaciano \footnote{Para sencillez de notación, usaremos
@@ -307,10 +316,6 @@ en un grafo es (\cite{kipf2016gcn}):
 
 $$f(H_l, A) = \bar \sigma (L H_l W_l)$$
 
-
-Es usual utilizar otra definición de $L$, como $L = D^{-\frac{1}{2}} A D^{-\frac{1}{2}}$,
-que mantiene el espectro pero no cambia la escala de la señal en el grafo (se normaliza
-según la cantidad de vecinos que tiene el nodo).
 
 En DCNN \cite{atwood2016dcnn} se utiliza una convolución que también incluye
 la información de los vecinos que están a más de un paso, y cada nodo
@@ -423,12 +428,17 @@ Finalmente, \texttt{COACH} es una SVM a la cual se le pasan los resultados de \t
 
 En \textbf{ATPbind}\cite{atpbind} se utiliza un acercamiento similar pero con únicamente el objetivo de
 predecir uniones con ATP. La razón para condicionar a un solo ligando es que se puede
-obtener una precisión superior, dado que no es necesario modelar o aprender muchos
-otros atributos físico-químicos. A nivel metodológico, se usan versiones modificadas de
+obtener una precisión superior: aproximar la distribución conjunta de probabilidad de unión
+requiere modelar (explícita o implícitamente) los distintos tipos de interacciones, mientras
+que aproximar la probabilidad de unión condicionada a un ligando en particular no.
+
+A nivel metodológico, se usan versiones modificadas de
 \texttt{TM-SITE} y \texttt{S-SITE}. Por el imbalance de clases (aproximadamente 25 a 1)
 se utliza \textit{random undersampling} y se arma un \textit{mean ensemble scheme} con
-10 SVMs. El resultado es de un AUC de $93.5\%$, pero tarda aproximadamente 45 minutos
-para predecir una proteína de 300 aminoácidos.
+10 SVMs. Si bien el resultado es bueno (AUC $93.5\%$), el gran tamaño del modelo hace
+que predecir cada instancia sea muy lento\footnote{En \cite{atpbind} se menciona
+que para una proteína de 300 aminoácidos el modelo predice sus sitios de unión
+en un poco menos de una hora.}.
 
 Otra manera de representar a las proteínas es no por su estructura (sea primaria,
 secundaria o terciaria), sino por cómo se comporta ante distintos ligandos. Es decir,
@@ -499,10 +509,13 @@ Pfam\footnote{\url{http://pfam.xfam.org/}}.
 % Explicar idea general. 
 % Contribuciones
 En este trabajo interpretamos que el problema de unión con una proteína no depende 
-de las posiciones absolutas de sus aminoácidos, sino que es un problema de 
-\textit{conectividad}. Dado esto, es natural usar una
-estructura de grafo para codificar el problema. Este grafo puede contener o 
-codificar también información topológica de la estructura tridimensional. El uso
+de las posiciones absolutas de sus aminoácidos, sino que es un problema de la
+\textit{conectividad} que tienen en el espacio. Dado esto, es natural usar una
+estructura de grafo para codificar el problema. Las redes neuronales de grafos
+utilizan entonces propiedades topológicas: un nodo no recibirá información
+de otro nodo en capas siguientes si no están en la misma componente conexa. De
+la misma manera, hay más pasaje de información entre comunidades y en regiones
+densas de conexiones. Además, el uso
 de un grafo tiene varios beneficios, ya que es invariante a rotaciones y 
 traslaciones en el espacio e inmediatamente codifica cuándo hay una unión y cuándo
 no. De otra manera, un modelo predictivo que parte desde las ubicaciones físicas 
@@ -512,7 +525,7 @@ aún más el problema.
 %mencionar que se hace en el instituto de cálculo y en FIUBA
 Esta noción no es nueva. En \cite{fout2017proteininterface} se utiliza un grafo
 donde los nodos son los aminoácidos de la proteína y hay arista si están hasta
-cierta distancia (e.g. $4\AA$). En esta tesis proponemos usar otro método, 
+cierta distancia (e.g. 4\r{A}). En esta tesis proponemos usar otro método, 
 que es a través de técnicas de homología persistente \cite{edelsbrunner2008perseus}. 
 Esencialmente, la idea es construir un complejo simplicial de manera
 iterativa hasta capturar las propiedades topológicas fundamentales de la estructura.
