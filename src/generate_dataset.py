@@ -4,14 +4,16 @@ import os
 import sys
 import argparse
 import requests
+import warnings
 import numpy as np
 import networkx as nx
+import pickle as pkl
 
-sys.path.append('../pyprot/')
-import pyprot.graph_models as graph_models
-from pyprot.downloader import PdbDownloader, ConsurfDBDownloader
-from pyprot.protein import Protein
-from pyprot.structure import Perseus
+import biograph.graph_models as graph_models
+from biograph.downloader import PdbDownloader, ConsurfDBDownloader
+from biograph.protein import Protein
+from biograph.structure import Perseus
+from biograph.groupfolds import CDHitGroup
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Generate dataset for protein graph analysis.')
@@ -48,13 +50,18 @@ if any(map(lambda fn: fn is None, filenames)):
 # Searching a bit I didn't find a way to get a chain list or get all
 # conservation features for a specific protein, so we need to look up
 # what chains it actually has by reading the PDB file.
-proteins = []
-for fn in filenames:
+print("Loading proteins")
+names = []
+sequences = []
+names_mapping = {}
+for i, fn in enumerate(filenames):
+    print(i, end=" ")
     if fn is None:
-        proteins.append(None)
         continue
-    protein = Protein(fn)
-    proteins.append(protein)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        protein = Protein(fn)
+
     # get_chains might have repeated IDs, so we use a set generator.
     chains = list({chain.id for chain in protein.pdb.get_chains()})
     id_chain_dict = {protein.pdb.id : chains}
@@ -73,7 +80,6 @@ for fn in filenames:
         except requests.exceptions.ReadTimeout:
             print("Timeout while fetching conservation data")
             pass
-
     # Distance features
     protein.df = protein.df[~protein.df.coord.isnull()]
     ATP_coords = protein.df[protein.df.resname == "ATP"].coord.to_list()
@@ -130,4 +136,20 @@ for fn in filenames:
     nx.write_gpickle(structure_model.G, dest_pickle)
     print("Exported graph to {}".format(dest_pickle))
 
+    # Add sequence and name to list
+    if len(protein.sequences) == 0:
+        print("PDB {} has no sequences!".format(protein.pdb.id))
+        continue
+    sequences.extend(protein.sequences.values())
+    names.extend(protein.sequences.keys())
+    names_mapping[protein.pdb.id] = list(protein.sequences.keys())
+
+
+print("Calculating CDHit groups..",end="")
+groups = CDHitGroup.get_group_by_sequences(sequences, names)
+print("Done! Writing files")
+groups_mapping = {name:groups[i] for i, name in enumerate(names)}
+
+with open("names_groups.pkl", "wb") as f:
+    pkl.dump((names_mapping, groups_mapping), f)
 
