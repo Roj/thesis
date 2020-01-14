@@ -8,6 +8,7 @@ import warnings
 import numpy as np
 import networkx as nx
 import pickle as pkl
+import progressbar
 
 import biograph.graph_models as graph_models
 from biograph.downloader import PdbDownloader, ConsurfDBDownloader
@@ -21,6 +22,9 @@ parser.add_argument('--skip-pdb-download', dest='skip_pdb_download', action='sto
                     help='skip PDB download')
 parser.add_argument('--no-consurf', dest='no_consurf', action='store_true',
                     help='do not add conservation (consurf DB) data')
+parser.add_argument('--laptop-safe', dest='laptop_safe', action='store_true',
+                    help='do not process proteins with > 200 ATP connections')
+
 
 
 args = parser.parse_args()
@@ -54,8 +58,8 @@ print("Loading proteins")
 names = []
 sequences = []
 names_mapping = {}
-for i, fn in enumerate(filenames):
-    print(i, end=" ")
+for i, fn in progressbar.progressbar(enumerate(filenames), max_value=len(filenames)):
+
     if fn is None:
         continue
     with warnings.catch_warnings():
@@ -83,8 +87,8 @@ for i, fn in enumerate(filenames):
     # Distance features
     protein.df = protein.df[~protein.df.coord.isnull()]
     ATP_coords = protein.df[protein.df.resname == "ATP"].coord.to_list()
-    print("Found {} ATP atoms".format(len(ATP_coords)))
-    if(len(ATP_coords) > 200):
+
+    if len(ATP_coords) > 200 and args.laptop_safe:
         print("Skipping it because it would fry my laptop")
         continue
     if len(ATP_coords) == 0:
@@ -124,17 +128,20 @@ for i, fn in enumerate(filenames):
     for node_idx, depth in depths.items():
         protein.graph.nodes[node_idx]["depth"] = depth
 
+    # Identify chain uniquely (useful later to match with CDHit)
+    protein.df["chain"] = protein.pdb.id + "_" + protein.df.chain
     # Rest of features
     structure_model.add_features(protein.df, columns = [
         "bfactor", "score", "color",
         "color_confidence_interval_high", "color_confidence_interval_low",
         "score_confidence_interval_high", "score_confidence_interval_low",
-        "resname", "coord", "distance"
+        "resname", "coord", "distance",
+        "chain"
     ])
 
     dest_pickle = "graphs/{}.pkl".format(protein.pdb.id)
     nx.write_gpickle(structure_model.G, dest_pickle)
-    print("Exported graph to {}".format(dest_pickle))
+    #print("Exported graph to {}".format(dest_pickle))
 
     # Add sequence and name to list
     if len(protein.sequences) == 0:
