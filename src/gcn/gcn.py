@@ -1,6 +1,7 @@
 import scipy.sparse as sp
 import numpy as np
 import tensorflow as tf
+import datetime
 from tensorflow.keras import layers
 
 class Laplacian:
@@ -77,28 +78,101 @@ class GraphConvolutionalNetwork(tf.keras.Model):
 
         return self.conv2(self.conv1(x, laplacian), laplacian)
 
-    def fit(self, feats, laplacians, targets, masks, epochs=3):
+    def setup_logs(self):
+        current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        train_log_dir = 'logs/gradient_tape/' + current_time + '/train'
+        test_log_dir = 'logs/gradient_tape/' + current_time + '/test'
+        train_summary_writer = tf.summary.create_file_writer(train_log_dir)
+        test_summary_writer = tf.summary.create_file_writer(test_log_dir)
+        return train_summary_writer, test_summary_writer
+
+    def fit(self, train_zip, val_zip, positive_weight=1, epochs=3):
+        """
+        Fits the model over `epochs` epochs (default 3).
+        train_zip: tuple (feats, laplacians, targets, masks)
+        val_zip: tuple (feats, laplacians, targets, masks)
+        """
         # TODO: class balance
         optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
         loss_fn = tf.keras.losses.BinaryCrossentropy()
+        train_loss = tf.keras.metrics.Mean("train_loss", dtype=tf.float32)
+        train_accuracy = tf.keras.metrics.AUC()
+        train_recall = tf.keras.metrics.Recall()
+        train_precision = tf.keras.metrics.Precision()
+        test_loss = tf.keras.metrics.Mean("test_loss", dtype=tf.float32)
+        test_accuracy = tf.keras.metrics.AUC()
+        test_recall = tf.keras.metrics.Recall()
+        test_precision = tf.keras.metrics.Precision()
+        train_wr, test_wr = self.setup_logs()
 
-        loss_metric = tf.keras.metrics.AUC()
 
         # Iterate over epochs.
         for epoch in range(epochs):
+
             print('Start of epoch %d' % (epoch,))
 
             # Iterate over the graphs.
-            for step, (x, y, L, mask) in enumerate(zip(feats, targets, laplacians, masks)):
+            train_conf = None
+
+            for step, (x, y, L, mask) in enumerate(zip(*train_zip)):
+                batch_size = mask.shape[0]
+                #rint(mask)
+                #print(y)
+                weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
+                if step == 0 and epoch == 0: print(weighted_mask)
                 with tf.GradientTape() as tape:
                     ỹ = self(x, L)
-                    ỹ = tf.reshape(ỹ, [-1])
-                    loss = loss_fn(y, ỹ)
+                    # loss requires (batch_size, num_classes)
+                    loss = loss_fn(tf.reshape(y, [batch_size, 1]), ỹ, sample_weight=weighted_mask)
 
+                ỹ = tf.reshape(ỹ, [-1])
                 grads = tape.gradient(loss, self.trainable_weights)
                 optimizer.apply_gradients(zip(grads, self.trainable_weights))
+                train_loss(loss)
+                train_accuracy(y, ỹ, sample_weight=mask)
+                train_recall(y, ỹ, sample_weight=mask)
+                train_precision(y, ỹ, sample_weight=mask)
+                pred_classes = tf.cast(tf.math.greater(ỹ, 0.5), tf.int32)
+                if train_conf is None:
+                    train_conf = tf.math.confusion_matrix(y, pred_classes, weights=mask)
+                else:
+                    train_conf = train_conf + tf.math.confusion_matrix(y, pred_classes, weights=mask)
 
-                loss_metric(y, ỹ, sample_weight=mask)
 
-                if step % 100 == 0:
-                    print('step %s: mean loss = %s' % (step, loss_metric.result()))
+            # Validation step.
+            self.conf_matrix = None
+            for x, y, L, mask in zip(*val_zip):
+                ỹ = self(x, L)
+                ỹ = tf.reshape(ỹ, [-1])
+                loss = loss_fn(y, ỹ)
+                test_loss(loss)
+                test_accuracy(y, ỹ, sample_weight=mask)
+                test_recall(y, ỹ, sample_weight=mask)
+                test_precision(y, ỹ, sample_weight=mask)
+                pred_classes = tf.cast(tf.math.greater(ỹ, 0.5), tf.int32)
+                if self.conf_matrix is None:
+                    self.conf_matrix = tf.math.confusion_matrix(y, pred_classes, weights=mask)
+                else:
+                    self.conf_matrix = self.conf_matrix + tf.math.confusion_matrix(y, pred_classes, weights=mask)
+
+            with train_wr.as_default():
+                tf.summary.scalar("loss", train_loss.result(), step=epoch)
+                tf.summary.scalar("auc", train_accuracy.result(), step=epoch)
+                tf.summary.scalar("recall", train_recall.result(), step=epoch)
+                tf.summary.scalar("precision", train_precision.result(), step=epoch)
+            with test_wr.as_default():
+                tf.summary.scalar("loss", test_loss.result(), step=epoch)
+                tf.summary.scalar("auc", test_accuracy.result(), step=epoch)
+                tf.summary.scalar("recall", test_recall.result(), step=epoch)
+                tf.summary.scalar("precision", test_precision.result(), step=epoch)
+
+            print("Epoch {}:\n\tTRAIN loss {:.2f}, auc {:.2f}, recall {:.2f}, precision {:.2f}\n\tVAL loss {:.2f} auc {:.2f} recall {:.2f} precision {:.2f}".format(epoch,
+                train_loss.result(), train_accuracy.result(), train_recall.result(), train_precision.result(),
+                test_loss.result(), test_accuracy.result(), test_recall.result(), test_precision.result()))
+            print("Confusion matrix(TRAIN):\n{}\nConfusion matrix(VAL):\n{}".format(
+                train_conf, self.conf_matrix))
+
+            train_loss.reset_states()
+            train_accuracy.reset_states()
+            test_loss.reset_states()
+            test_accuracy.reset_states()
