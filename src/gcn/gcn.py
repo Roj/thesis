@@ -78,7 +78,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
 
         return self.conv2(self.conv1(x, laplacian), laplacian)
 
-    def setup_logs(self):
+    def make_logs(self):
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         train_log_dir = 'logs/gradient_tape/' + current_time + '/train'
         test_log_dir = 'logs/gradient_tape/' + current_time + '/test'
@@ -86,40 +86,55 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         test_summary_writer = tf.summary.create_file_writer(test_log_dir)
         return train_summary_writer, test_summary_writer
 
+    def setup_metrics(self, name):
+        loss = tf.keras.metrics.Mean(f"{name}_loss", dtype=tf.float32)
+        accuracy = tf.keras.metrics.AUC()
+        recall = tf.keras.metrics.Recall()
+        precision = tf.keras.metrics.Precision()
+        return loss, accuracy, recall, precision
+
+    def log_metrics(self, loss, acc, recall, prec, epoch):
+        tf.summary.scalar("loss", loss.result(), step=epoch)
+        tf.summary.scalar("auc", acc.result(), step=epoch)
+        tf.summary.scalar("recall", recall.result(), step=epoch)
+        tf.summary.scalar("precision", prec.result(), step=epoch)
+
+    def reset_metrics(self, loss, acc, recall, prec):
+        loss.reset_states()
+        acc.reset_states()
+        recall.reset_states()
+        prec.reset_states()
+
+    def update_conf_matrix(self, y, ỹ, mask, conf):
+        pred_classes = tf.cast(tf.math.greater(ỹ, 0.5), tf.int32)
+        if conf is None:
+            return tf.math.confusion_matrix(y, pred_classes, weights=mask)
+
+        return  conf + tf.math.confusion_matrix(y, pred_classes, weights=mask)
+
     def fit(self, train_zip, val_zip, positive_weight=1, epochs=3):
         """
         Fits the model over `epochs` epochs (default 3).
         train_zip: tuple (feats, laplacians, targets, masks)
         val_zip: tuple (feats, laplacians, targets, masks)
         """
-        # TODO: class balance
         optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
         loss_fn = tf.keras.losses.BinaryCrossentropy()
-        train_loss = tf.keras.metrics.Mean("train_loss", dtype=tf.float32)
-        train_accuracy = tf.keras.metrics.AUC()
-        train_recall = tf.keras.metrics.Recall()
-        train_precision = tf.keras.metrics.Precision()
-        test_loss = tf.keras.metrics.Mean("test_loss", dtype=tf.float32)
-        test_accuracy = tf.keras.metrics.AUC()
-        test_recall = tf.keras.metrics.Recall()
-        test_precision = tf.keras.metrics.Precision()
-        train_wr, test_wr = self.setup_logs()
-
+        train_loss, train_accuracy, train_recall, train_precision = self.setup_metrics("train")
+        test_loss, test_accuracy, test_recall, test_precision = self.setup_metrics("test")
+        train_wr, test_wr = self.make_logs()
 
         # Iterate over epochs.
         for epoch in range(epochs):
 
             print('Start of epoch %d' % (epoch,))
-
             # Iterate over the graphs.
             train_conf = None
 
             for step, (x, y, L, mask) in enumerate(zip(*train_zip)):
                 batch_size = mask.shape[0]
-                #rint(mask)
-                #print(y)
                 weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
-                if step == 0 and epoch == 0: print(weighted_mask)
+                if step == epoch == 0: print(weighted_mask)
                 with tf.GradientTape() as tape:
                     ỹ = self(x, L)
                     # loss requires (batch_size, num_classes)
@@ -132,47 +147,33 @@ class GraphConvolutionalNetwork(tf.keras.Model):
                 train_accuracy(y, ỹ, sample_weight=mask)
                 train_recall(y, ỹ, sample_weight=mask)
                 train_precision(y, ỹ, sample_weight=mask)
-                pred_classes = tf.cast(tf.math.greater(ỹ, 0.5), tf.int32)
-                if train_conf is None:
-                    train_conf = tf.math.confusion_matrix(y, pred_classes, weights=mask)
-                else:
-                    train_conf = train_conf + tf.math.confusion_matrix(y, pred_classes, weights=mask)
-
+                train_conf = self.update_conf_matrix(y, ỹ, mask, train_conf)
 
             # Validation step.
-            self.conf_matrix = None
+            test_conf = None
             for x, y, L, mask in zip(*val_zip):
+                batch_size = mask.shape[0]
+                weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
                 ỹ = self(x, L)
+                loss = loss_fn(tf.reshape(y, [batch_size, 1]), ỹ, sample_weight=weighted_mask)
                 ỹ = tf.reshape(ỹ, [-1])
-                loss = loss_fn(y, ỹ)
                 test_loss(loss)
                 test_accuracy(y, ỹ, sample_weight=mask)
                 test_recall(y, ỹ, sample_weight=mask)
                 test_precision(y, ỹ, sample_weight=mask)
-                pred_classes = tf.cast(tf.math.greater(ỹ, 0.5), tf.int32)
-                if self.conf_matrix is None:
-                    self.conf_matrix = tf.math.confusion_matrix(y, pred_classes, weights=mask)
-                else:
-                    self.conf_matrix = self.conf_matrix + tf.math.confusion_matrix(y, pred_classes, weights=mask)
+                test_conf = self.update_conf_matrix(y, ỹ, mask, test_conf)
 
             with train_wr.as_default():
-                tf.summary.scalar("loss", train_loss.result(), step=epoch)
-                tf.summary.scalar("auc", train_accuracy.result(), step=epoch)
-                tf.summary.scalar("recall", train_recall.result(), step=epoch)
-                tf.summary.scalar("precision", train_precision.result(), step=epoch)
+                self.log_metrics(train_loss, train_accuracy, train_recall, train_precision, epoch)
+
             with test_wr.as_default():
-                tf.summary.scalar("loss", test_loss.result(), step=epoch)
-                tf.summary.scalar("auc", test_accuracy.result(), step=epoch)
-                tf.summary.scalar("recall", test_recall.result(), step=epoch)
-                tf.summary.scalar("precision", test_precision.result(), step=epoch)
+                self.log_metrics(test_loss, test_accuracy, test_recall, test_precision, epoch)
 
             print("Epoch {}:\n\tTRAIN loss {:.2f}, auc {:.2f}, recall {:.2f}, precision {:.2f}\n\tVAL loss {:.2f} auc {:.2f} recall {:.2f} precision {:.2f}".format(epoch,
                 train_loss.result(), train_accuracy.result(), train_recall.result(), train_precision.result(),
                 test_loss.result(), test_accuracy.result(), test_recall.result(), test_precision.result()))
             print("Confusion matrix(TRAIN):\n{}\nConfusion matrix(VAL):\n{}".format(
-                train_conf, self.conf_matrix))
+                train_conf, test_conf))
 
-            train_loss.reset_states()
-            train_accuracy.reset_states()
-            test_loss.reset_states()
-            test_accuracy.reset_states()
+            self.reset_metrics(train_loss, train_accuracy, train_recall, train_precision)
+            self.reset_metrics(test_loss, test_accuracy, test_recall, test_precision)
