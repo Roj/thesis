@@ -3,6 +3,7 @@ import numpy as np
 import tensorflow as tf
 import datetime
 from tensorflow.keras import layers
+import sklearn.model_selection
 
 class Laplacian:
     @staticmethod
@@ -112,12 +113,75 @@ class GraphConvolutionalNetwork(tf.keras.Model):
 
         return  conf + tf.math.confusion_matrix(y, pred_classes, weights=mask)
 
-    def fit(self, train_zip, val_zip, positive_weight=1, epochs=3):
+    def fit_cv_groups(self, data_zip, groups, positive_weight=1.0, epochs=3):
+        """
+        Fits the model using group cross validation over `epochs` epochs
+        (default 3).
+        Parameters
+        ----------
+        data_zip: tuple
+            List of (feats, targets, laplacians, masks)
+        groups: iterable
+            Group for each
+        positive_weight: float (default 1.0)
+        epochs: integer (default 3)
+        """
+        group_kfold = sklearn.model_selection.GroupKFold(5)
+        feats, laplacians, targets, masks = data_zip
+        # So far the weights haven't been initialized, and
+        # saving weights will save 0 layers. We can force
+        # initialization like so:
+        _ = self(feats[0], laplacians[0])
+        # And now we can save the starting point
+        self.save_weights('init.h5')
+        best_score = 0
+        for train_idx, test_idx in group_kfold.split(feats, groups=groups):
+            print("Resetting weights..")
+            self.load_weights('init.h5')
+            X_train = [feats[i] for i in train_idx]
+            L_train = [laplacians[i] for i in train_idx]
+            Y_train = [targets[i] for i in train_idx]
+            M_train = [masks[i] for i in train_idx]
+
+            X_test = [feats[i] for i in test_idx]
+            L_test = [laplacians[i] for i in test_idx]
+            Y_test = [targets[i] for i in test_idx]
+            M_test = [masks[i] for i in test_idx]
+
+            score = self.fit(
+                (X_train, Y_train, L_train, M_train),
+                (X_test, Y_test, L_test, M_test),
+                positive_weight=positive_weight,
+                epochs=epochs,
+                verbose=False
+            )
+            if score > best_score:
+                print("Best score achieved, saving weights..")
+                self.save_weights('best.h5')
+                best_score = best_score
+
+        print(f"Best score is {best_score}, loading weights saved in 'best.h5")
+        self.load_weights('best.h5') # return model to its initial
+
+
+    def fit(self, train_zip, val_zip, positive_weight=1.0, epochs=3, verbose=False):
         """
         Fits the model over `epochs` epochs (default 3).
-        train_zip: tuple (feats, laplacians, targets, masks)
-        val_zip: tuple (feats, laplacians, targets, masks)
+        Parameters
+        ----------
+        train_zip: tuple
+            Tuple of (feats, targets,laplacians,  masks)
+        val_zip: tuple
+            same as train_zip
+        positive_weight: float (default 1.0)
+            weight for positive class
+        epochs: integer (default 3)
+        verbose: bool (default False)
+        Returns:
+        auc: float
+            best auc achieved by the model
         """
+        #print(train_zip)
         optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
         loss_fn = tf.keras.losses.BinaryCrossentropy()
         train_loss, train_accuracy, train_recall, train_precision = self.setup_metrics("train")
@@ -125,6 +189,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         train_wr, test_wr = self.make_logs()
 
         # Iterate over epochs.
+        best_auc = 0
         for epoch in range(epochs):
 
             print('Start of epoch %d' % (epoch,))
@@ -134,7 +199,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
             for step, (x, y, L, mask) in enumerate(zip(*train_zip)):
                 batch_size = mask.shape[0]
                 weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
-                if step == epoch == 0: print(weighted_mask)
+                if step == epoch == 0 and verbose: print(weighted_mask)
                 with tf.GradientTape() as tape:
                     ỹ = self(x, L)
                     # loss requires (batch_size, num_classes)
@@ -175,5 +240,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
             print("Confusion matrix(TRAIN):\n{}\nConfusion matrix(VAL):\n{}".format(
                 train_conf, test_conf))
 
+            best_auc = max(best_auc, test_accuracy.result())
             self.reset_metrics(train_loss, train_accuracy, train_recall, train_precision)
             self.reset_metrics(test_loss, test_accuracy, test_recall, test_precision)
+        return best_auc
