@@ -24,6 +24,8 @@ parser.add_argument('--no-consurf', dest='no_consurf', action='store_true',
                     help='do not add conservation (consurf DB) data')
 parser.add_argument('--laptop-safe', dest='laptop_safe', action='store_true',
                     help='do not process proteins with > 200 ATP connections')
+parser.add_argument('--include-interior-points', dest='include_interior', action='store_true',
+                    help='do not process proteins with > 200 ATP connections')
 
 
 
@@ -113,7 +115,6 @@ for i, fn in progressbar.progressbar(enumerate(filenames), max_value=len(filenam
     protein.select_chains(chains_with_ligand)
 
     # Generate the graph.
-    protein.discard_ligands()
     structure = protein.generate_structure(lambda row: row["full_id"][4][0] == "CA")
 
     perseus = Perseus()
@@ -121,7 +122,8 @@ for i, fn in progressbar.progressbar(enumerate(filenames), max_value=len(filenam
 
     structure_model = graph_models.StructureGraphGenerator()
     protein.generate_graph(structure_model,
-        {"step": structure.persistent_hom_params["b3_step"]})
+        {"step": structure.persistent_hom_params["b3_step"],
+         "surface_only": not args.include_interior})
 
     # Depth features
     depths, _ = structure.calculate_depth(protein.graph)
