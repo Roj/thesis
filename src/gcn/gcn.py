@@ -158,7 +158,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
             if score > best_score:
                 print("Best score achieved, saving weights..")
                 self.save_weights('best.h5')
-                best_score = best_score
+                best_score = score
 
         print(f"Best score is {best_score}, loading weights saved in 'best.h5")
         self.load_weights('best.h5') # return model to its initial
