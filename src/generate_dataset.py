@@ -27,6 +27,8 @@ parser.add_argument('--laptop-safe', dest='laptop_safe', action='store_true',
 parser.add_argument('--include-interior-points', dest='include_interior', action='store_true',
                     help='do not process proteins with > 200 ATP connections')
 
+parser.add_argument('--skip_graph_generation', dest='skip_graph_generation', action="store_true",
+                    help="skip graph generation altogether")
 
 
 args = parser.parse_args()
@@ -61,13 +63,21 @@ names = []
 sequences = []
 names_mapping = {}
 for i, fn in progressbar.progressbar(enumerate(filenames), max_value=len(filenames)):
-
     if fn is None:
         continue
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         protein = Protein(fn)
 
+    # Add sequence and name to list
+    if len(protein.sequences) == 0:
+        print("PDB {} has no sequences!".format(protein.pdb.id))
+        continue
+    sequences.extend(protein.sequences.values())
+    names.extend(protein.sequences.keys())
+    names_mapping[protein.pdb.id] = list(protein.sequences.keys())
+
+    # Consurf
     # get_chains might have repeated IDs, so we use a set generator.
     chains = list({chain.id for chain in protein.pdb.get_chains()})
     id_chain_dict = {protein.pdb.id : chains}
@@ -86,6 +96,10 @@ for i, fn in progressbar.progressbar(enumerate(filenames), max_value=len(filenam
         except requests.exceptions.ReadTimeout:
             print("Timeout while fetching conservation data")
             pass
+
+    if args.skip_graph_generation:
+        continue
+    # Features and graph generation
     # Distance features
     protein.df = protein.df[~protein.df.coord.isnull()]
     ATP_coords = protein.df[protein.df.resname == "ATP"].coord.to_list()
@@ -145,13 +159,7 @@ for i, fn in progressbar.progressbar(enumerate(filenames), max_value=len(filenam
     nx.write_gpickle(structure_model.G, dest_pickle)
     #print("Exported graph to {}".format(dest_pickle))
 
-    # Add sequence and name to list
-    if len(protein.sequences) == 0:
-        print("PDB {} has no sequences!".format(protein.pdb.id))
-        continue
-    sequences.extend(protein.sequences.values())
-    names.extend(protein.sequences.keys())
-    names_mapping[protein.pdb.id] = list(protein.sequences.keys())
+
 
 
 print("Calculating CDHit groups..",end="")
