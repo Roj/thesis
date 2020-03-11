@@ -315,14 +315,13 @@ def master():
     for child in children:
         child.start()
 
-    #bar = progressbar.ProgressBar(max_value=len(filenames))
+    bar = progressbar.ProgressBar(max_value=len(filenames))
     i = 0
     jobs_processed = [0]*len(jobs_quota)
-    while i < len(filenames):
+    while bar.value < len(filenames):
         pnum = progress_queue.get()
         jobs_processed[pnum] += 1
-        #bar.update(bar.value + 1)
-        i+=1
+        bar.update(bar.value + 1)
         for j, child in enumerate(children):
             if not child.is_alive() and jobs_processed[j] < jobs_quota[j]:
                 logger.error(f"Process {j} is not alive and"
