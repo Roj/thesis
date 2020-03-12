@@ -38,6 +38,8 @@ parser.add_argument("--workers", dest="workers", type=int, default=4,
                     help='number of workers to use')
 parser.add_argument('--skip_graph_generation', dest='skip_graph_generation', action="store_true",
                     help="skip graph generation altogether")
+parser.add_argument("--discard-distant-chains", dest="discard_chains_without_atp", action="store_true",
+                    help="discard chains that have no contact with ATP")
 
 
 
@@ -142,11 +144,14 @@ def worker(filenames, progress_queue, logger, worker_id):
             logger.warning(f"{protein.pdb.id} no atoms are linked to ligand")
             continue
 
-        # Only keep chains that are connected to the ligand.
-        chains_with_ligand = protein.df[protein.df.distance <= 6.0].chain.unique()
-        protein.select_chains(chains_with_ligand)
+        if args.discard_chains_without_atp:
+            # Only keep chains that are connected to the ligand.
+            chains_with_ligand = protein.df[protein.df.distance <= 6.0].chain.unique()
+            protein.select_chains(chains_with_ligand)
+
         # Identify chain uniquely (useful later to match with CDHit)
         protein.df["chain"] = protein.pdb.id + "_" + protein.df.chain
+
         if args.contacts_graph:
             scgg = graph_models.StaticContactGraphGenerator()
             try:
