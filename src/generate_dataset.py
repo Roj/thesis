@@ -77,6 +77,10 @@ def worker(filenames, progress_queue, logger, worker_id):
     names_mapping = {}
     #setup logging with worker_id
     for i, fn in enumerate(filenames):
+        # Since there can be exceptions along the way,
+        # we take note of the progress here:
+        progress_queue.put(worker_id)
+
         if fn is None:
             continue
         with warnings.catch_warnings():
@@ -156,7 +160,8 @@ def worker(filenames, progress_queue, logger, worker_id):
             scgg = graph_models.StaticContactGraphGenerator()
             try:
                 protein.generate_graph(scgg, {
-                    "save_contact_filename": f"if/contacts/{protein.pdb.id}_contacts.tsv"
+                    "save_contact_filename": f"if/contacts/{protein.pdb.id}_contacts.tsv",
+                    "verbosity": 0
                 })
             except Exception as e:
                 logger.info(f"Error while generating contacts graph on protein #{i} ({fn}): {e}")
@@ -164,7 +169,7 @@ def worker(filenames, progress_queue, logger, worker_id):
 
             scgg.add_features(protein.df, columns = [
                 "x", "y", "z", "bfactor", "chain", "occupancy", "distance"
-            ])
+            ], verbosity = 0)
             graph = protein.graph
             dest_pickle = "graphs/contacts/{}.pkl".format(protein.pdb.id)
         else:
@@ -198,7 +203,6 @@ def worker(filenames, progress_queue, logger, worker_id):
 
         nx.write_gpickle(graph, dest_pickle)
         #logging.debug("Exported graph to {}".format(dest_pickle))
-        progress_queue.put(worker_id)
 
     with open(f"if/multiprocessing/generate_dataset_{worker_id}", "wb") as intermediate_file:
         pkl.dump((sequences, names, names_mapping), intermediate_file)
@@ -298,9 +302,11 @@ def master():
     logger_process.start()
     logger.set_master(True)
 
+    logger.info(f"Called with args {args}")
     logger.debug("Downloading files")
     filenames = download_pdbs_get_filenames()
     progress_queue = multiprocessing.Queue()
+
 
     logger.debug("Creating workers")
     children = []
@@ -343,7 +349,8 @@ def master():
     names = []
     names_mapping = {}
     for j in range(args.workers):
-        worker_seq, worker_names, worker_mapping = pkl.load(f"if/multiprocessing/generate_dataset_{j}")
+        with open(f"if/multiprocessing/generate_dataset_{j}", "rb") as intermediate_result:
+            worker_seq, worker_names, worker_mapping = pkl.load(intermediate_result)
         sequences.extend(worker_seq)
         names.extend(worker_names)
         names_mapping.update(worker_mapping)
