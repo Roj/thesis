@@ -1,9 +1,12 @@
+"""Main pipeline options for experiments"""
 import os
 import logging
+import subprocess
+import progressbar
 import networkx as nx
 import numpy as np
 import scipy.sparse as sp
-import subprocess
+import pandas as pd
 import tensorflow as tf
 from gcn.gcn import Laplacian, sparse_to_tuple, GraphConvolutionalNetwork
 
@@ -112,6 +115,37 @@ class ThesisPipeline:
 
             self.all_features.append(features)
 
+    def propagate_features_graph(self, steps=3):
+        """Propagate feature values along edges"""
+        from biograph.graph_models import GraphModel
+        logging.info("Propagating features...")
+        for i in progressbar.progressbar(range(len(self.graphs))):
+            self.graphs[i] = GraphModel.get_diffused_graph(
+                self.graphs[i], steps=steps)
+
+    def make_diffused_features(self, steps=3):
+        """Obtain diffused features from already diffused graphs"""
+        from biograph.graph_models import GraphModel
+        import biograph.constants
+
+        self.all_features = []
+        logging.info("Generating features..")
+        for graph in progressbar.progressbar(self.graphs):
+            df = GraphModel.graph_to_dataframe(graph)
+            # One hot for AAs
+            for code3 in biograph.constants.AMINOACIDS_3 + ["UNK"]:
+                df[code3] = (df.resname == code3).astype(np.int)
+
+            for i, coord in enumerate(["x", "y", "z"]):
+                df[coord] = df.coord.map(lambda x: x[i])
+
+            df = df[[c for c in df.columns if "distance_" not in c]]
+            df = df.drop(["full_id","resname", "coord", "distance", "chain"], axis=1)
+            if not self.all_features:
+                logging.info(f"Dataframe features: {df.columns}")
+            self.all_features.append(df)
+
+
     def plot_features_shape_hist(self):
         """Plot number of rows for features (i.e. node amount)"""
         import matplotlib.pyplot as plt
@@ -141,17 +175,31 @@ class ThesisPipeline:
         """Discard instances that have more than `amount` nodes. Discards
         features, adjacency matrices, targets and protein groups."""
         keep = [features.shape[0] < amount for features in self.all_features]
-        self.all_features = [features.astype(np.float32)
+        self.all_features = [features
             for i, features in enumerate(self.all_features)
             if keep[i]]
-        self.all_adj = [adj.astype(np.float32)
-                        for i, adj in enumerate(self.all_adj)
-                        if keep[i]]
-        self.all_targets = [targets.astype(np.float32)
+
+        self.all_targets = [targets
                             for i, targets in enumerate(self.all_targets)
                             if keep[i]]
         self.protein_groups = [g for i, g in enumerate(self.protein_groups)
-                               if keep[i]]
+                              if keep[i]]
+        if "all_adj" in self.__dict__:
+            self.all_adj = [adj
+                            for i, adj in enumerate(self.all_adj)
+                            if keep[i]]
+
+    def convert_matrices_32bits(self):
+        """Convert matrices to 32bits to not burn RAM"""
+        self.all_features = [features.astype(np.float32)
+                             for features in self.all_features]
+
+        self.all_targets = [targets.astype(np.float32)
+                            for targets in self.all_targets]
+        if "all_adj" in self.__dict__:
+            self.all_adj = [adj.astype(np.float32)
+                            for adj in self.all_adj]
+
     def make_positive_weight(self):
         """Make positive class weight"""
         self.fair_positive_weight = 1/(sum(self.class_balance)/len(self.class_balance))
@@ -189,6 +237,7 @@ class ThesisPipeline:
             self.masks_all.append(mask)
 
     def run_cv_gcn(self, epochs=40):
+        """Prepare tensors and run GCN with Group K-Fold CV"""
         tf.data.Dataset.from_tensor_slices = lambda a: a
         feats = self.all_features
         supps = [tf.sparse.SparseTensor(indices, values.astype(np.float32), dense_shape)
@@ -198,3 +247,40 @@ class ThesisPipeline:
         model = GraphConvolutionalNetwork(feats[0].shape, 1, self.all_laplacians[0][2])
         model.fit_cv_groups((feats, supps, targs, masks), self.protein_groups,
                    positive_weight=self.fair_positive_weight, epochs=epochs)
+        return model
+
+    def run_cv_hypersearch_xgb(self, n_iter):
+        """Concatenate all dataframes and run XGB with Group K-Fold CV
+        and Randomized Hyperparametr Search."""
+        from scipy.stats import uniform
+        import sklearn.model_selection
+        import xgboost as xgb
+
+        for df, group, target in zip(self.all_features, self.protein_groups, self.all_targets):
+            df["target"] = target
+            df["group"] = group
+        dataset = pd.concat(self.all_features, ignore_index=True)
+        dataset = dataset.loc[dataset.group.notna()]
+
+        row_groups = dataset.group
+        row_target = dataset.target
+        dataset = dataset.drop(["group", "target"], axis=1)
+
+        logging.info(f"Dataframe shape: {dataset.shape}")
+        logging.info(f"Columns passed to model: {dataset.columns}")
+
+        param = {'max_depth': 2, 'eta': 1, 'objective': 'binary:logistic',
+                 'nthread': 4, 'eval_metric': 'auc'}
+
+        groupk= sklearn.model_selection.GroupKFold(n_splits=5)
+        clf = xgb.XGBClassifier(**param)
+
+        clf = sklearn.model_selection.RandomizedSearchCV(
+            clf, {"max_depth": list(range(3,10)),
+                "min_child_weight": uniform(loc=0.5, scale=1.5), # ~U(loc, loc+scale)
+                "eta": uniform(loc=0.2, scale=0.3)},
+            cv=groupk, n_iter=n_iter, scoring="roc_auc", verbose=5, n_jobs=3)
+
+        search = clf.fit(dataset, row_target, row_groups)
+
+        return clf, search
