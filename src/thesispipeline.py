@@ -136,11 +136,13 @@ class ThesisPipeline:
             for code3 in biograph.constants.AMINOACIDS_3 + ["UNK"]:
                 df[code3] = (df.resname == code3).astype(np.int)
 
-            for i, coord in enumerate(["x", "y", "z"]):
-                df[coord] = df.coord.map(lambda x: x[i])
+            if "coord" in df.columns:
+                for i, coord in enumerate(["x", "y", "z"]):
+                    df[coord] = df.coord.map(lambda x: x[i])
 
             df = df[[c for c in df.columns if "distance_" not in c]]
-            df = df.drop(["full_id","resname", "coord", "distance", "chain"], axis=1)
+            df = df.drop(["full_id","resname", "coord", "distance", "chain"],
+                         axis=1, errors="ignore")
             if not self.all_features:
                 logging.info(f"Dataframe features: {df.columns}")
             self.all_features.append(df)
@@ -174,6 +176,7 @@ class ThesisPipeline:
     def filter_by_node_amount(self, amount=1000):
         """Discard instances that have more than `amount` nodes. Discards
         features, adjacency matrices, targets and protein groups."""
+        logging.info(f"Before filtering: {len(self.all_features)} instances")
         keep = [features.shape[0] < amount for features in self.all_features]
         self.all_features = [features
             for i, features in enumerate(self.all_features)
@@ -188,6 +191,8 @@ class ThesisPipeline:
             self.all_adj = [adj
                             for i, adj in enumerate(self.all_adj)
                             if keep[i]]
+
+        logging.info(f"After filtering: {len(self.all_features)} instances")
 
     def convert_matrices_32bits(self):
         """Convert matrices to 32bits to not burn RAM"""
