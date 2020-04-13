@@ -5,7 +5,7 @@ import networkx as nx
 class NeighborhoodIterator:
     """Class that takes an nx.Graph and explodes it into different neighborhoods
     with an iterator interface. Also handles node features and targets."""
-    def __init__(self, graph, features, targets, dist=2, negative_prob=1.0):
+    def __init__(self, graph, features, targets, nb_nodes=None, dist=2, negative_prob=1.0):
         """Sets up the iterator for the graph to transform into patches.
         Supports negative sampling with probability.
         Parameters
@@ -13,6 +13,7 @@ class NeighborhoodIterator:
             graph: nx.Graph
             features: list-like, aligned with graph.nodes
             targets: list-like, aligned with graph.nodes
+            nb_nodes: int, number of nodes. If subgraph has fewer, padding will be used.
             dist: int, maximum distance to center node to consider for neighborhood
             negative_prob: float between 0 and 1, probabilty to accept a negative sample.
         Returns
@@ -21,6 +22,7 @@ class NeighborhoodIterator:
         self.G = graph
         self.features = features
         self.targets = targets
+        self.nb_nodes = nb_nodes
         self.dist = dist
         self.negative_prob = negative_prob
         self.current = 0
@@ -65,7 +67,9 @@ class NeighborhoodIterator:
         -------
             A: Adjacency Matrix (SciPy sparse matrix)
             F: features, list or numpy.ndarray
-            t: center target"""
+            t: center target. Array of len(nb_nodes) if nb_nodes is not None. Otherwise,
+               it is just the value of the center node.
+            mask: mask indicating center node"""
         self.current += 1
         if self.current > len(self.nodelist):
             raise StopIteration
@@ -80,14 +84,24 @@ class NeighborhoodIterator:
 
         H = self.G.subgraph(neighbors)
 
-        # Features
+        # Features and mask
         F = []
+        mask = []
         for idx in H.nodes:
             F.append(self.nodeidx_features_map[idx])
+            mask.append(1 if idx == node_idx else 0) # Center node
 
-        # If we received a numpy array we should give back a numpy array.
+        targets = self.targets[self.current-1]
+        # If we received a numpy array we should give back numpy arrays.
         # Otherwise, return a list.
         if isinstance(self.features, np.ndarray):
             F = np.array(F)
+            mask = np.array(mask)
+            if self.nb_nodes is not None:
+                # We should pad all that can be padded (features, mask, targets).
+                pad_amount = self.nb_nodes - F.shape[0]
+                F = np.pad(F, ((0,pad_amount), (0,0)))
+                mask = np.pad(mask, ((0, pad_amount)))
+                targets = np.array([targets]*self.nb_nodes)
 
-        return nx.adjacency_matrix(H), F, self.targets[self.current-1]
+        return nx.adjacency_matrix(H), F, targets, mask
