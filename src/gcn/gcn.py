@@ -4,6 +4,8 @@ import tensorflow as tf
 import datetime
 from tensorflow.keras import layers
 import sklearn.model_selection
+from neighborhooditerator import NeighborhoodIterator
+import progressbar
 
 class Laplacian:
     @staticmethod
@@ -68,6 +70,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
     def __init__(self, input_shape, output_dim, laplacian_shape, **kwargs):
         super(GraphConvolutionalNetwork, self).__init__(**kwargs)
         self.laplacian = tf.Variable#TODO
+        self.laplacian_shape = laplacian_shape
         self.conv1 = LaplacianConvolution(16, input_shape=input_shape)
         self.conv2 = LaplacianConvolution(output_dim, activation="sigmoid")
 
@@ -127,7 +130,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         epochs: integer (default 3)
         """
         group_kfold = sklearn.model_selection.GroupKFold(5)
-        feats, laplacians, targets, masks = data_zip
+        feats, laplacians = data_zip[0], data_zip[2]
         # So far the weights haven't been initialized, and
         # saving weights will save 0 layers. We can force
         # initialization like so:
@@ -138,19 +141,19 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         for train_idx, test_idx in group_kfold.split(feats, groups=groups):
             print("Resetting weights..")
             self.load_weights('init.h5')
-            X_train = [feats[i] for i in train_idx]
-            L_train = [laplacians[i] for i in train_idx]
-            Y_train = [targets[i] for i in train_idx]
-            M_train = [masks[i] for i in train_idx]
 
-            X_test = [feats[i] for i in test_idx]
-            L_test = [laplacians[i] for i in test_idx]
-            Y_test = [targets[i] for i in test_idx]
-            M_test = [masks[i] for i in test_idx]
+            train_zip = [
+                [seq[i] for i in train_idx]
+                for seq in data_zip
+            ]
+            test_zip = [
+                [seq[i] for i in test_idx]
+                for seq in data_zip
+            ]
 
             score = self.fit(
-                (X_train, Y_train, L_train, M_train),
-                (X_test, Y_test, L_test, M_test),
+                train_zip,
+                test_zip,
                 positive_weight=positive_weight,
                 epochs=epochs,
                 verbose=False
@@ -170,7 +173,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         Parameters
         ----------
         train_zip: tuple
-            Tuple of (feats, targets,laplacians,  masks)
+            Tuple of (feats, targets, laplacians,  masks)
         val_zip: tuple
             same as train_zip
         positive_weight: float (default 1.0)
@@ -181,7 +184,6 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         auc: float
             best auc achieved by the model
         """
-        #print(train_zip)
         optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
         loss_fn = tf.keras.losses.BinaryCrossentropy()
         train_loss, train_accuracy, train_recall, train_precision = self.setup_metrics("train")
@@ -200,14 +202,17 @@ class GraphConvolutionalNetwork(tf.keras.Model):
                 batch_size = mask.shape[0]
                 weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
                 if step == epoch == 0 and verbose: print(weighted_mask)
+
                 with tf.GradientTape() as tape:
                     ỹ = self(x, L)
                     # loss requires (batch_size, num_classes)
                     loss = loss_fn(tf.reshape(y, [batch_size, 1]), ỹ, sample_weight=weighted_mask)
 
                 ỹ = tf.reshape(ỹ, [-1])
-                grads = tape.gradient(loss, self.trainable_weights)
-                optimizer.apply_gradients(zip(grads, self.trainable_weights))
+                if self.apply_gradient(step):
+                    grads = tape.gradient(loss, self.trainable_weights)
+                    optimizer.apply_gradients(zip(grads, self.trainable_weights))
+
                 train_loss(loss)
                 train_accuracy(y, ỹ, sample_weight=mask)
                 train_recall(y, ỹ, sample_weight=mask)
@@ -216,12 +221,137 @@ class GraphConvolutionalNetwork(tf.keras.Model):
 
             # Validation step.
             test_conf = None
-            for x, y, L, mask in zip(*val_zip):
+            for step, (x, y, L, mask) in enumerate(zip(*val_zip)):
                 batch_size = mask.shape[0]
                 weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
                 ỹ = self(x, L)
                 loss = loss_fn(tf.reshape(y, [batch_size, 1]), ỹ, sample_weight=weighted_mask)
                 ỹ = tf.reshape(ỹ, [-1])
+
+                test_loss(loss)
+                test_accuracy(y, ỹ, sample_weight=mask)
+                test_recall(y, ỹ, sample_weight=mask)
+                test_precision(y, ỹ, sample_weight=mask)
+                test_conf = self.update_conf_matrix(y, ỹ, mask, test_conf)
+
+            with train_wr.as_default():
+                self.log_metrics(train_loss, train_accuracy, train_recall, train_precision, epoch)
+
+            with test_wr.as_default():
+                self.log_metrics(test_loss, test_accuracy, test_recall, test_precision, epoch)
+
+            print("Epoch {}:\n\tTRAIN loss {:.2f}, auc {:.2f}, recall {:.2f}, precision {:.2f}\n\tVAL loss {:.2f} auc {:.2f} recall {:.2f} precision {:.2f}".format(epoch,
+                train_loss.result(), train_accuracy.result(), train_recall.result(), train_precision.result(),
+                test_loss.result(), test_accuracy.result(), test_recall.result(), test_precision.result()))
+            print("Confusion matrix(TRAIN):\n{}\nConfusion matrix(VAL):\n{}".format(
+                train_conf, test_conf))
+
+            best_auc = max(best_auc, test_accuracy.result())
+            self.reset_metrics(train_loss, train_accuracy, train_recall, train_precision)
+            self.reset_metrics(test_loss, test_accuracy, test_recall, test_precision)
+        return best_auc
+
+
+class LocalGCN(GraphConvolutionalNetwork):
+    def __init__(self, *args, **kwargs):
+        super(LocalGCN, self).__init__(*args, **kwargs)
+    def fit(self, train_zip, val_zip, positive_weight=1.0, epochs=3, verbose=False):
+        """
+        Fits the model over `epochs` epochs (default 3).
+        Parameters
+        ----------
+        train_zip: tuple
+            Tuple of (feats, targets, laplacians,  masks, last_neighborhood)
+        val_zip: tuple
+            same as train_zip
+        positive_weight: float (default 1.0)
+            weight for positive class
+        epochs: integer (default 3)
+        verbose: bool (default False)
+        Returns:
+        auc: float
+            best auc achieved by the model
+        """
+        optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+        loss_fn = tf.keras.losses.BinaryCrossentropy()
+        train_loss, train_accuracy, train_recall, train_precision = self.setup_metrics("train")
+        test_loss, test_accuracy, test_recall, test_precision = self.setup_metrics("test")
+        train_wr, test_wr = self.make_logs()
+
+        # Iterate over epochs.
+        best_auc = 0
+        for epoch in range(epochs):
+
+            print('Start of epoch %d' % (epoch,))
+            # Iterate over the graphs.
+            train_conf = None
+            it = progressbar.ProgressBar()(enumerate(zip(*train_zip)), max_value=len(train_zip[0]))
+            for step, (x, y, L, mask, last_neigh) in it:
+
+                with tf.GradientTape() as tape:
+                    weighted_masks_concatenated = []
+                    masks_concatenated = []
+                    ỹ_concatenated = []
+                    y_concatenated = []
+                    while last_neigh == 0:
+                        weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
+                        if step == epoch == 0 and verbose: print(weighted_mask)
+                        ỹ = self(x, L)
+                        masks_concatenated.append(mask)
+                        weighted_masks_concatenated.append(weighted_mask)
+                        ỹ_concatenated.append(ỹ)
+                        y_concatenated.append(y)
+                        step, (x, y, L, mask, last_neigh) = next(it)
+
+                    mask = tf.concat(masks_concatenated, axis=0)
+                    weighted_mask = tf.concat(weighted_masks_concatenated, axis=0)
+                    ỹ = tf.concat(ỹ_concatenated, axis=0)
+                    y = tf.concat(y_concatenated, axis=0)
+                    # loss requires (batch_size, num_classes)
+                    loss = loss_fn(
+                        tf.reshape(y, [weighted_mask.shape[0], 1]),
+                        ỹ,
+                        sample_weight=weighted_mask)
+
+                ỹ = tf.reshape(ỹ, [-1])
+
+                grads = tape.gradient(loss, self.trainable_weights)
+                optimizer.apply_gradients(zip(grads, self.trainable_weights))
+
+                train_loss(loss)
+                train_accuracy(y, ỹ, sample_weight=mask)
+                train_recall(y, ỹ, sample_weight=mask)
+                train_precision(y, ỹ, sample_weight=mask)
+                train_conf = self.update_conf_matrix(y, ỹ, mask, train_conf)
+
+            # Validation step.
+            test_conf = None
+            it = enumerate(zip(*val_zip))
+            for step, (x, y, L, mask, last_neigh) in it:
+                weighted_masks_concatenated = []
+                masks_concatenated = []
+                ỹ_concatenated = []
+                y_concatenated = []
+                while last_neigh == 0:
+                    weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
+                    ỹ = self(x, L)
+                    masks_concatenated.append(mask)
+                    weighted_masks_concatenated.append(weighted_mask)
+                    ỹ_concatenated.append(ỹ)
+                    y_concatenated.append(y)
+                    step, (x, y, L, mask, last_neigh) = next(it)
+
+                mask = tf.concat(masks_concatenated, axis=0)
+                weighted_mask = tf.concat(weighted_masks_concatenated, axis=0)
+                ỹ = tf.concat(ỹ_concatenated, axis=0)
+                y = tf.concat(y_concatenated, axis=0)
+                loss = loss_fn(
+                        tf.reshape(y, [weighted_mask.shape[0], 1]),
+                        ỹ,
+                        sample_weight=weighted_mask)
+
+                ỹ = tf.reshape(ỹ, [-1])
+
                 test_loss(loss)
                 test_accuracy(y, ỹ, sample_weight=mask)
                 test_recall(y, ỹ, sample_weight=mask)
