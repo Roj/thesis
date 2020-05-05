@@ -8,7 +8,7 @@ import numpy as np
 import scipy.sparse as sp
 import pandas as pd
 import tensorflow as tf
-from gcn.gcn import Laplacian, sparse_to_tuple, GraphConvolutionalNetwork
+from gcn.gcn import Laplacian, sparse_to_tuple, GraphConvolutionalNetwork, LocalGCN
 
 class ThesisPipeline:
     def __init__(self):
@@ -209,6 +209,72 @@ class ThesisPipeline:
             self.all_adj = [adj.astype(np.float32)
                             for adj in self.all_adj]
 
+    def make_neighborhoods(self, nb_nodes=None, dist=2, negative_prob=0.5, verbose=0):
+        """Explode features, targets, adjacencies and masks into neighborhood-level.
+        Also adjusts class balance and protein groups.
+
+        Parameters
+        ----------
+            nb_nodes: int
+                Specify to filter neighborhoods bigger than the
+                given size and pad arrays to that amount.
+            dist: int
+                Number of steps to take from center node to create
+                a neighborhood.
+            negative_prob: float
+                Sampling probability for a negative node.
+            verbose: int
+                Higher number is more verbose."""
+        from neighborhooditerator import NeighborhoodIterator
+        neighborhood_features = []
+        neighborhood_adj = []
+        neighborhood_targets = []
+        neighborhood_masks = []
+        neighborhood_groups = []
+        neighborhood_last_indicator = []
+        class_balance = [0, 0]
+
+        if "all_adj" in self.__dict__:
+            del self.all_adj
+
+
+        logging.info("Generating neighborhoods..")
+        it = self.graphs
+        if verbose > 0:
+            it = progressbar.ProgressBar()(it, max_value=len(self.graphs))
+        for graph in it:
+            graph_features = self.all_features.pop(0)
+            graph_targets = self.all_targets.pop(0)
+            graph_group = self.protein_groups.pop(0)
+            num_neighborhoods = 0
+            for nA, nF, nT, nM in NeighborhoodIterator(
+                    graph, graph_features, graph_targets, nb_nodes=nb_nodes,
+                    dist=dist, negative_prob=negative_prob):
+
+                # since mask only selects the center node, sum(mask*targets)
+                # gets that single value
+                class_balance[np.isclose((nM*nT).sum(),1)] += 1
+
+                neighborhood_adj.append(nA)
+                neighborhood_features.append(nF)
+                neighborhood_targets.append(nT)
+                neighborhood_masks.append(nM)
+                neighborhood_groups.append(graph_group)
+                num_neighborhoods+=1
+
+            neighborhood_last_indicator.extend([0]*(num_neighborhoods-1) + [1])
+
+        self.all_features = neighborhood_features
+        self.all_targets = neighborhood_targets
+        self.all_adj = neighborhood_adj
+        self.all_masks = neighborhood_masks
+        self.protein_groups = neighborhood_groups
+        self.last_neighborhood = neighborhood_last_indicator
+
+        self.class_balance = [class_balance[1]/class_balance[0]] # positive / negative
+        logging.info("New class balance is %f", self.class_balance[0])
+
+
     def make_positive_weight(self):
         """Make positive class weight"""
         self.fair_positive_weight = 1/(sum(self.class_balance)/len(self.class_balance))
@@ -222,7 +288,7 @@ class ThesisPipeline:
 
     def pad_matrices(self):
         """Make the matrices the same size via padding or modifying the sparse
-        matrix attributes. Make masks as well"""
+        matrix attributes. """
         self.nb_nodes_per_graph = [adj[2][1] for adj in self.all_laplacians]
         self.nb_nodes = max(map(lambda adj: adj[2][1], self.all_laplacians))
         logging.info(f"Maximum number of nodes per graph: {self.nb_nodes}")
@@ -240,10 +306,16 @@ class ThesisPipeline:
             amount = self.nb_nodes-target.shape[0]
             self.all_targets[i] = np.pad(target, (0,amount))
 
-        self.masks_all = []
-        for n in self.nb_nodes_per_graph:
-            mask = np.pad(np.ones(n), (0, self.nb_nodes - n)).astype(np.float32)
-            self.masks_all.append(mask)
+    def make_masks(self, pad_only=False):
+        """Make masks. If using predefined masks, you can just pad them specifying pad_only."""
+        if not pad_only:
+            self.all_masks = []
+            for n in self.nb_nodes_per_graph:
+                mask = np.ones(n)
+                self.all_masks.append(mask)
+
+        for i, (mask, n) in enumerate(zip(self.all_masks, self.nb_nodes_per_graph)):
+            self.all_masks[i] = np.pad(mask, (0, self.nb_nodes - n)).astype(np.float32)
 
     def run_cv_gcn(self, epochs=40):
         """Prepare tensors and run GCN with Group K-Fold CV"""
@@ -252,15 +324,29 @@ class ThesisPipeline:
         supps = [tf.sparse.SparseTensor(indices, values.astype(np.float32), dense_shape)
                     for indices, values, dense_shape in self.all_laplacians]
         targs = self.all_targets
-        masks = self.masks_all
+        masks = self.all_masks
         model = GraphConvolutionalNetwork(feats[0].shape, 1, self.all_laplacians[0][2])
-        model.fit_cv_groups((feats, supps, targs, masks), self.protein_groups,
+        model.fit_cv_groups((feats, targs, supps, masks), self.protein_groups,
                    positive_weight=self.fair_positive_weight, epochs=epochs)
+        return model
+
+    def run_cv_local_gcn(self, epochs=40):
+        """Prepare tensors and run LocalGCN with Group K-Fold CV"""
+        tf.data.Dataset.from_tensor_slices = lambda a: a
+        feats = self.all_features
+        supps = [tf.sparse.SparseTensor(indices, values.astype(np.float32), dense_shape)
+                    for indices, values, dense_shape in self.all_laplacians]
+        targs = self.all_targets
+        masks = self.all_masks
+        last_neighborhood = self.last_neighborhood
+        model = LocalGCN(feats[0].shape, 1, self.all_laplacians[0][2])
+        model.fit_cv_groups((feats, targs, supps, masks, last_neighborhood), self.protein_groups,
+                positive_weight=self.fair_positive_weight, epochs=epochs)
         return model
 
     def run_cv_hypersearch_xgb(self, n_iter):
         """Concatenate all dataframes and run XGB with Group K-Fold CV
-        and Randomized Hyperparametr Search."""
+        and Randomized Hyperparameter Search."""
         from scipy.stats import uniform
         import sklearn.model_selection
         import xgboost as xgb
@@ -277,11 +363,12 @@ class ThesisPipeline:
 
         logging.info(f"Dataframe shape: {dataset.shape}")
         logging.info(f"Columns passed to model: {dataset.columns}")
+        logging.info(f"Data types: {dataset.dtypes}")
 
         param = {'max_depth': 2, 'eta': 1, 'objective': 'binary:logistic',
                  'nthread': 4, 'eval_metric': 'auc'}
 
-        groupk= sklearn.model_selection.GroupKFold(n_splits=5)
+        groupk = sklearn.model_selection.GroupKFold(n_splits=5)
         clf = xgb.XGBClassifier(**param)
 
         clf = sklearn.model_selection.RandomizedSearchCV(
