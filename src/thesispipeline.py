@@ -155,8 +155,12 @@ class ThesisPipeline:
 
     def make_adjacency_matrices(self):
         """Make adjacency matrix using a sparse representation"""
-        # TODO: normalize?
         self.all_adj = [nx.adjacency_matrix(graph) for graph in self.graphs]
+
+    def normalize_adjacency_matrices(self):
+        """Normalize adjacency matrices into 1/0 assuming CSR format"""
+        for A in self.all_adj:
+            A.data = np.ones_like(A.data, dtype=A.data.dtype)
 
     def make_targets(self):
         """Make targets using customary definition based on distance to ligand"""
