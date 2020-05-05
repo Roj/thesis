@@ -5,7 +5,8 @@ import networkx as nx
 class NeighborhoodIterator:
     """Class that takes an nx.Graph and explodes it into different neighborhoods
     with an iterator interface. Also handles node features and targets."""
-    def __init__(self, graph, features, targets, nb_nodes=None, dist=2, negative_prob=1.0):
+    def __init__(self, graph, features, targets, nb_nodes=None,
+                 dist=2, negative_prob=1.0):
         """Sets up the iterator for the graph to transform into patches.
         Supports negative sampling with probability.
         Parameters
@@ -57,7 +58,7 @@ class NeighborhoodIterator:
         return self
 
     def __next__(self):
-        """Returns adjacency matrix, features and center target for the
+        """Returns adjacency matrix, features, target and mask for the
         neighborhood.
 
         Parameters
@@ -67,8 +68,9 @@ class NeighborhoodIterator:
         -------
             A: Adjacency Matrix (SciPy sparse matrix)
             F: features, list or numpy.ndarray
-            t: center target. Array of len(nb_nodes) if nb_nodes is not None. Otherwise,
-               it is just the value of the center node.
+            t: center target if features is list. If features is array,
+               then it is array repeating the value of the center node,
+               of len(nb_nodes) if nb_nodes is not None.
             mask: mask indicating center node"""
         self.current += 1
         if self.current > len(self.nodelist):
@@ -82,9 +84,12 @@ class NeighborhoodIterator:
         node_idx = self.nodelist[self.current-1]
         neighbors = self._get_neighborhood_nodes(self.G, node_idx, self.dist)
 
-        H = self.G.subgraph(neighbors)
+        # Check we haven't surpassed maximum amount of nodes.
+        if (self.nb_nodes is not None) and (len(neighbors) > self.nb_nodes):
+            return self.__next__()
 
         # Features and mask
+        H = self.G.subgraph(neighbors)
         F = []
         mask = []
         for idx in H.nodes:
@@ -95,13 +100,15 @@ class NeighborhoodIterator:
         # If we received a numpy array we should give back numpy arrays.
         # Otherwise, return a list.
         if isinstance(self.features, np.ndarray):
-            F = np.array(F)
-            mask = np.array(mask)
+            F = np.array(F, dtype=np.float32)
+            mask = np.array(mask, dtype=np.float32)
+            targets = np.array([targets]*F.shape[0], dtype=np.float32)
             if self.nb_nodes is not None:
                 # We should pad all that can be padded (features, mask, targets).
                 pad_amount = self.nb_nodes - F.shape[0]
                 F = np.pad(F, ((0,pad_amount), (0,0)))
                 mask = np.pad(mask, ((0, pad_amount)))
-                targets = np.array([targets]*self.nb_nodes)
+                targets = np.array([targets]*self.nb_nodes, dtype=np.float32)
+
 
         return nx.adjacency_matrix(H), F, targets, mask
