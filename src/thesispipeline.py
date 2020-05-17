@@ -317,7 +317,7 @@ class ThesisPipeline:
         for i, (mask, n) in enumerate(zip(self.all_masks, self.nb_nodes_per_graph)):
             self.all_masks[i] = np.pad(mask, (0, self.nb_nodes - n)).astype(np.float32)
 
-    def run_cv_gcn(self, epochs=40):
+    def run_cv_gcn(self, epochs=40, name=""):
         """Prepare tensors and run GCN with Group K-Fold CV"""
         tf.data.Dataset.from_tensor_slices = lambda a: a
         feats = self.all_features
@@ -325,12 +325,12 @@ class ThesisPipeline:
                     for indices, values, dense_shape in self.all_laplacians]
         targs = self.all_targets
         masks = self.all_masks
-        model = GraphConvolutionalNetwork(feats[0].shape, 1, self.all_laplacians[0][2])
+        model = GraphConvolutionalNetwork(feats[0].shape, 1, self.all_laplacians[0][2], name=name)
         model.fit_cv_groups((feats, targs, supps, masks), self.protein_groups,
                    positive_weight=self.fair_positive_weight, epochs=epochs)
         return model
 
-    def run_cv_local_gcn(self, epochs=40):
+    def run_cv_local_gcn(self, epochs=40, name=""):
         """Prepare tensors and run LocalGCN with Group K-Fold CV"""
         tf.data.Dataset.from_tensor_slices = lambda a: a
         feats = self.all_features
@@ -339,7 +339,7 @@ class ThesisPipeline:
         targs = self.all_targets
         masks = self.all_masks
         last_neighborhood = self.last_neighborhood
-        model = LocalGCN(feats[0].shape, 1, self.all_laplacians[0][2])
+        model = LocalGCN(feats[0].shape, 1, self.all_laplacians[0][2], name=name)
         model.fit_cv_groups((feats, targs, supps, masks, last_neighborhood), self.protein_groups,
                 positive_weight=self.fair_positive_weight, epochs=epochs)
         return model

@@ -1,9 +1,10 @@
 import yaml
+import logging
 import pathlib
 from thesispipeline import ThesisPipeline
 
 class ExperimentExecutor:
-    def run_gcn(self, experiment_name, contacts=False, neighborhoods=False,
+    def run_gcn(self, contacts=False, neighborhoods=False,
                 normalize_adj=False, epochs=2, filter_node_amount=None):
         thesis = ThesisPipeline()
 
@@ -30,13 +31,14 @@ class ExperimentExecutor:
         thesis.make_positive_weight()
         thesis.make_laplacians()
         thesis.pad_matrices()
+
         if neighborhoods:
-            thesis.run_cv_local_gcn(epochs=epochs)
+            thesis.run_cv_local_gcn(epochs=epochs, name=self.experiment_name)
         else:
             thesis.make_masks()
-            thesis.run_cv_gcn(epochs=epochs)
+            thesis.run_cv_gcn(epochs=epochs, name=self.experiment_name)
 
-    def run_xgb(self, experiment_name, contacts=False, steps=3, filter_node_amount=None):
+    def run_xgb(self, contacts=False, steps=3, filter_node_amount=None):
         thesis = ThesisPipeline()
         if contacts:
             thesis.load_data(graphs_folder="graphs/contacts/", names_groups_file="names_groups.pkl")
@@ -58,9 +60,11 @@ class ExperimentExecutor:
 
     def __init__(self, filename):
         self.experiment_name = filename.stem
-        # TODO: log config
+
         with open(filename) as file:
             self.config = yaml.safe_load(file)
+
+        logging.info("Loading experiment with config %s", self.config)
 
         if self.config["model"] == "gcn":
             self.model = self.run_gcn
@@ -72,10 +76,23 @@ class ExperimentExecutor:
         del self.config["model"]
 
     def run(self):
-        self.model(self.experiment_name, **self.config)
+        self.model(**self.config)
 
 if __name__ == "__main__":
-    # change log according to experiment
+    logging.basicConfig(level=logging.INFO, filename="experiment_executor.log")
+    logger = logging.getLogger()
+
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     for filename in pathlib.Path("experiments").glob("*.yml"):
+        # Restart logger with a new log file
+        logger.removeHandler(logger.handlers[-1])
+        handler = logging.FileHandler(f"logs/{filename.stem}.log")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+
+        # Run experiment
+        logging.info(f"Running experiment {filename.stem}")
         experiment = ExperimentExecutor(filename)
         experiment.run()
+        logging.info(f"Finished experiment {filename.stem}")
+

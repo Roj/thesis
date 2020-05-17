@@ -2,6 +2,7 @@ import scipy.sparse as sp
 import numpy as np
 import tensorflow as tf
 import datetime
+import logging
 from tensorflow.keras import layers
 import sklearn.model_selection
 from neighborhooditerator import NeighborhoodIterator
@@ -73,6 +74,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         self.laplacian_shape = laplacian_shape
         self.conv1 = LaplacianConvolution(16, input_shape=input_shape)
         self.conv2 = LaplacianConvolution(output_dim, activation="sigmoid")
+        self.network_name = kwargs.get("name", "")
 
         for layer in self.layers:
             for weight in layer.weights:
@@ -84,8 +86,10 @@ class GraphConvolutionalNetwork(tf.keras.Model):
 
     def make_logs(self):
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        train_log_dir = 'logs/gradient_tape/' + current_time + '/train'
-        test_log_dir = 'logs/gradient_tape/' + current_time + '/test'
+        #TODO change name in folds
+        train_log_dir = f"logs/gradient_tape/{self.network_name}_{current_time}/train"
+        test_log_dir = f"logs/gradient_tape/{self.network_name}_{current_time}/test"
+
         train_summary_writer = tf.summary.create_file_writer(train_log_dir)
         test_summary_writer = tf.summary.create_file_writer(test_log_dir)
         return train_summary_writer, test_summary_writer
@@ -138,8 +142,11 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         # And now we can save the starting point
         self.save_weights('init.h5')
         best_score = 0
-        for train_idx, test_idx in group_kfold.split(feats, groups=groups):
-            print("Resetting weights..")
+        original_name = self.network_name
+        self.network_name += "0"
+        for fold, (train_idx, test_idx) in enumerate(group_kfold.split(feats, groups=groups)):
+            logging.info("Resetting weights..")
+            self.network_name = self.network_name[:-1] + str(fold)
             self.load_weights('init.h5')
 
             train_zip = [
@@ -159,12 +166,12 @@ class GraphConvolutionalNetwork(tf.keras.Model):
                 verbose=False
             )
             if score > best_score:
-                print("Best score achieved, saving weights..")
-                self.save_weights('best.h5')
+                logging.info("Best score achieved, saving weights..")
+                self.save_weights(f"best_{original_name}.h5")
                 best_score = score
 
-        print(f"Best score is {best_score}, loading weights saved in 'best.h5")
-        self.load_weights('best.h5') # return model to its initial
+        logging.info(f"Best score is {best_score}, loading weights saved in best_{original_name}.h5")
+        self.load_weights(f"best_{original_name}.h5")
 
 
     def fit(self, train_zip, val_zip, positive_weight=1.0, epochs=3, verbose=False):
@@ -194,14 +201,14 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         best_auc = 0
         for epoch in range(epochs):
 
-            print('Start of epoch %d' % (epoch,))
+            logging.info('Start of epoch %d' % (epoch,))
             # Iterate over the graphs.
             train_conf = None
 
             for step, (x, y, L, mask) in enumerate(zip(*train_zip)):
                 batch_size = mask.shape[0]
                 weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
-                if step == epoch == 0 and verbose: print(weighted_mask)
+                if step == epoch == 0 and verbose: logging.info(weighted_mask)
 
                 with tf.GradientTape() as tape:
                     ỹ = self(x, L)
@@ -209,9 +216,9 @@ class GraphConvolutionalNetwork(tf.keras.Model):
                     loss = loss_fn(tf.reshape(y, [batch_size, 1]), ỹ, sample_weight=weighted_mask)
 
                 ỹ = tf.reshape(ỹ, [-1])
-                if self.apply_gradient(step):
-                    grads = tape.gradient(loss, self.trainable_weights)
-                    optimizer.apply_gradients(zip(grads, self.trainable_weights))
+
+                grads = tape.gradient(loss, self.trainable_weights)
+                optimizer.apply_gradients(zip(grads, self.trainable_weights))
 
                 train_loss(loss)
                 train_accuracy(y, ỹ, sample_weight=mask)
@@ -240,10 +247,10 @@ class GraphConvolutionalNetwork(tf.keras.Model):
             with test_wr.as_default():
                 self.log_metrics(test_loss, test_accuracy, test_recall, test_precision, epoch)
 
-            print("Epoch {}:\n\tTRAIN loss {:.2f}, auc {:.2f}, recall {:.2f}, precision {:.2f}\n\tVAL loss {:.2f} auc {:.2f} recall {:.2f} precision {:.2f}".format(epoch,
+            logging.info("Epoch {}:\n\tTRAIN loss {:.2f}, auc {:.2f}, recall {:.2f}, precision {:.2f}\n\tVAL loss {:.2f} auc {:.2f} recall {:.2f} precision {:.2f}".format(epoch,
                 train_loss.result(), train_accuracy.result(), train_recall.result(), train_precision.result(),
                 test_loss.result(), test_accuracy.result(), test_recall.result(), test_precision.result()))
-            print("Confusion matrix(TRAIN):\n{}\nConfusion matrix(VAL):\n{}".format(
+            logging.info("Confusion matrix(TRAIN):\n{}\nConfusion matrix(VAL):\n{}".format(
                 train_conf, test_conf))
 
             best_auc = max(best_auc, test_accuracy.result())
@@ -282,7 +289,7 @@ class LocalGCN(GraphConvolutionalNetwork):
         best_auc = 0
         for epoch in range(epochs):
 
-            print('Start of epoch %d' % (epoch,))
+            logging.info('Start of epoch %d' % (epoch,))
             # Iterate over the graphs.
             train_conf = None
             it = progressbar.ProgressBar()(enumerate(zip(*train_zip)), max_value=len(train_zip[0]))
@@ -295,7 +302,7 @@ class LocalGCN(GraphConvolutionalNetwork):
                     y_concatenated = []
                     while last_neigh == 0:
                         weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
-                        if step == epoch == 0 and verbose: print(weighted_mask)
+                        if step == epoch == 0 and verbose: logging.info(weighted_mask)
                         ỹ = self(x, L)
                         masks_concatenated.append(mask)
                         weighted_masks_concatenated.append(weighted_mask)
@@ -364,10 +371,10 @@ class LocalGCN(GraphConvolutionalNetwork):
             with test_wr.as_default():
                 self.log_metrics(test_loss, test_accuracy, test_recall, test_precision, epoch)
 
-            print("Epoch {}:\n\tTRAIN loss {:.2f}, auc {:.2f}, recall {:.2f}, precision {:.2f}\n\tVAL loss {:.2f} auc {:.2f} recall {:.2f} precision {:.2f}".format(epoch,
+            logging.info("Epoch {}:\n\tTRAIN loss {:.2f}, auc {:.2f}, recall {:.2f}, precision {:.2f}\n\tVAL loss {:.2f} auc {:.2f} recall {:.2f} precision {:.2f}".format(epoch,
                 train_loss.result(), train_accuracy.result(), train_recall.result(), train_precision.result(),
                 test_loss.result(), test_accuracy.result(), test_recall.result(), test_precision.result()))
-            print("Confusion matrix(TRAIN):\n{}\nConfusion matrix(VAL):\n{}".format(
+            logging.info("Confusion matrix(TRAIN):\n{}\nConfusion matrix(VAL):\n{}".format(
                 train_conf, test_conf))
 
             best_auc = max(best_auc, test_accuracy.result())
