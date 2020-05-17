@@ -38,7 +38,7 @@ parser.add_argument("--workers", dest="workers", type=int, default=4,
                     help='number of workers to use')
 parser.add_argument('--skip_graph_generation', dest='skip_graph_generation', action="store_true",
                     help="skip graph generation altogether")
-parser.add_argument("--discard-distant-chains", dest="discard_chains_without_atp", action="store_true",
+parser.add_argument("--discard-chains-without-atp", dest="discard_chains_without_atp", action="store_true",
                     help="discard chains that have no contact with ATP")
 
 
@@ -140,21 +140,15 @@ def worker(filenames, progress_queue, logger, worker_id):
             lambda atom: min(map(lambda atp_atom: np.linalg.norm(atom-atp_atom), ATP_coords))
         )
         protein.discard_ligands()
-        # Sanity check
-        protein.df = protein.df.loc[
-                protein.df.apply(lambda row: row["full_id"][4][0] == "CA", axis=1),:].reset_index(drop=True)
+
 
         if min(protein.df.distance) >= 6.0:
             logger.warning(f"{protein.pdb.id} no atoms are linked to ligand")
             continue
 
-        if args.discard_chains_without_atp:
-            # Only keep chains that are connected to the ligand.
-            chains_with_ligand = protein.df[protein.df.distance <= 6.0].chain.unique()
-            protein.select_chains(chains_with_ligand)
-
         # Identify chain uniquely (useful later to match with CDHit)
         protein.df["chain"] = protein.pdb.id + "_" + protein.df.chain
+        chains_with_ligand = protein.df[protein.df.distance <= 6.0].chain.unique()
 
         if args.contacts_graph:
             scgg = graph_models.StaticContactGraphGenerator()
@@ -168,11 +162,34 @@ def worker(filenames, progress_queue, logger, worker_id):
                 continue
 
             scgg.add_features(protein.df, columns = [
-                "x", "y", "z", "bfactor", "chain", "occupancy", "distance"
+                "x", "y", "z", "bfactor", "chain", "occupancy", "distance", "resname"
             ], verbosity = 0)
+
+            if args.discard_chains_without_atp:
+                # Note: compared to the surface graph, we do not need to filter
+                # the dataframe, since the static contact graph generates
+                # the graph from the pdb file directly.
+                # Remove nodes that are from discarded chains
+                # Warning: some nodes that are from distant chains but have
+                # no data in their node entry will still be there. Therefore
+                # this only makes sense if you filter graphs with missing node
+                # data later.
+                nodelist = list(protein.graph.nodes())
+                for node_idx in nodelist:
+                    if "chain" not in protein.graph[node_idx]:
+                        continue
+                    if protein.graph[node_idx]["chain"] not in chains_with_ligand:
+                        protein.graph.remove_node(node_idx)
+
             graph = protein.graph
             dest_pickle = "graphs/contacts/{}.pkl".format(protein.pdb.id)
         else:
+            # Sanity check
+            protein.df = protein.df.loc[
+                protein.df.apply(lambda row: row["full_id"][4][0] == "CA", axis=1),:].reset_index(drop=True)
+            if args.discard_chains_without_atp:
+                # Only keep chains that are connected to the ligand.
+                protein.select_chains(chains_with_ligand)
             # Generate the graph.
             structure = protein.generate_structure(lambda row: row["full_id"][4][0] == "CA")
 
