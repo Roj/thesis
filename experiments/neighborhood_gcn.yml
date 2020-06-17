@@ -1,4 +1,5 @@
 model: gcn
-filter_node_amount: 1000
-epochs: 3
+epochs: 40
 neighborhoods: true
+dist: 3
+negative_prob: 0.5
