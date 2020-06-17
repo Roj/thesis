@@ -68,12 +68,21 @@ class LaplacianConvolution(layers.Layer):
         return self.activation(masked + self.conv_bias)
 
 class GraphConvolutionalNetwork(tf.keras.Model):
-    def __init__(self, input_shape, output_dim, laplacian_shape, **kwargs):
+    def __init__(self, input_shape, output_dim, laplacian_shape, hidden_dims=[128], **kwargs):
         super(GraphConvolutionalNetwork, self).__init__(**kwargs)
+        logging.info("Running modified hyperparam version!")
+        logging.info("Hidden dims are %s", hidden_dims)
+        print("Running modified hyperparam version!")
         self.laplacian = tf.Variable#TODO
         self.laplacian_shape = laplacian_shape
-        self.conv1 = LaplacianConvolution(16, input_shape=input_shape)
-        self.conv2 = LaplacianConvolution(output_dim, activation="sigmoid")
+        self.conv_layers = []
+        for i, hidden_dim in enumerate(hidden_dims):
+            if i == 0:
+                self.conv_layers.append(LaplacianConvolution(hidden_dim, input_shape=input_shape))
+            else:
+                self.conv_layers.append(LaplacianConvolution(hidden_dim))
+
+        self.conv_layers.append(LaplacianConvolution(output_dim, activation="sigmoid"))
         self.network_name = kwargs.get("name", "")
 
         for layer in self.layers:
@@ -82,7 +91,11 @@ class GraphConvolutionalNetwork(tf.keras.Model):
 
     def call(self, x, laplacian):
 
-        return self.conv2(self.conv1(x, laplacian), laplacian)
+        value = x
+        for layer in self.conv_layers:
+            value = layer(value, laplacian)
+
+        return value
 
     def make_logs(self):
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
