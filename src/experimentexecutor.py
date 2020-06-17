@@ -5,7 +5,8 @@ from thesispipeline import ThesisPipeline
 
 class ExperimentExecutor:
     def run_gcn(self, contacts=False, neighborhoods=False,
-                normalize_adj=False, epochs=2, filter_node_amount=None):
+                normalize_adj=False, epochs=2, filter_node_amount=None,
+                dist=3, negative_prob=0.5):
         thesis = ThesisPipeline()
 
         if contacts:
@@ -15,10 +16,18 @@ class ExperimentExecutor:
             thesis.load_data(graphs_folder="graphs/", names_groups_file="names_groups.pkl")
 
         thesis.make_protein_groups()
+
         thesis.check_protein_groups()
-        thesis.remove_interior_nodes()
+
+        if not contacts:
+            thesis.remove_interior_nodes()
+
         thesis.make_features()
         thesis.make_adjacency_matrices()
+
+        if normalize_adj:
+            thesis.normalize_adjacency_matrices()
+
         thesis.make_targets()
         thesis.convert_matrices_32bits()
 
@@ -26,13 +35,14 @@ class ExperimentExecutor:
             thesis.filter_by_node_amount(amount=filter_node_amount)
 
         if neighborhoods:
-            thesis.make_neighborhoods(dist=3, negative_prob=0.5, verbose=1)
+            thesis.make_neighborhoods(dist=dist, negative_prob=negative_prob, verbose=1)
 
         thesis.make_positive_weight()
         thesis.make_laplacians()
         thesis.pad_matrices()
 
         if neighborhoods:
+            thesis.make_masks(pad_only=True)
             thesis.run_cv_local_gcn(epochs=epochs, name=self.experiment_name)
         else:
             thesis.make_masks()
@@ -84,6 +94,10 @@ if __name__ == "__main__":
 
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     for filename in pathlib.Path("experiments").glob("*.yml"):
+
+        if "xgb" in str(filename) or filename.stem in ["simple_gcn", "normalize_gcn", "neighborhood_gcn"]:
+            print(f"Skipping {filename}")
+            continue
         # Restart logger with a new log file
         logger.removeHandler(logger.handlers[-1])
         handler = logging.FileHandler(f"logs/{filename.stem}.log")
