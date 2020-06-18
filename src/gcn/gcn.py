@@ -68,15 +68,46 @@ class LaplacianConvolution(layers.Layer):
         return self.activation(masked + self.conv_bias)
 
 class GraphConvolutionalNetwork(tf.keras.Model):
-    def __init__(self, input_shape, output_dim, laplacian_shape, hidden_dims=[128], **kwargs):
+    default_hyperparams = {
+        "num_layers": 1,
+        "learning_rate": 1e-3,
+        "num_filters": 128,
+        "batch_normalization": False
+    }
+    def __init__(self, input_shape, output_dim, laplacian_shape,
+                 log_hyperparams=False, hyperparams=default_hyperparams, **kwargs):
+        """Construct the GCN model.
+        Parameters
+        ----------
+        input_shape: integer
+            Number of features.
+        output_dim: integer
+            Number of classes to predict. Currently only 1 is supported, as we use binary cross entropy.
+        laplacian_shape: iterable of integer
+            Numpy shape of the laplacian.
+        log_hyperparams: bool
+            If True, use tensorboard to log hyperparameters. Default False.
+        hyperparams: dict
+            Specify num_layers, learning_rate, num_filters, batch_normalization. See
+            GraphConvolutionalNetwork.defauly_hyperparams for more info.
+        kwargs: dict
+            Other special parameters, such as network name (`name`).
+
+        """
         super(GraphConvolutionalNetwork, self).__init__(**kwargs)
-        logging.info("Running modified hyperparam version!")
-        logging.info("Hidden dims are %s", hidden_dims)
-        print("Running modified hyperparam version!")
-        self.laplacian = tf.Variable#TODO
+
+        # If hyperparams is missing some keys, use default values.
+        for key in self.default_hyperparams.keys():
+            hyperparams.setdefault(key, self.default_hyperparams[key])
+
+        self.hyperparams = hyperparams
+        self.laplacian = tf.Variable
         self.laplacian_shape = laplacian_shape
+
+        # Set up layers
         self.conv_layers = []
-        for i, hidden_dim in enumerate(hidden_dims):
+        hidden_dim = hyperparams["num_filters"]
+        for i in range(hyperparams["num_layers"]):
             if i == 0:
                 self.conv_layers.append(LaplacianConvolution(hidden_dim, input_shape=input_shape))
             else:
@@ -90,7 +121,6 @@ class GraphConvolutionalNetwork(tf.keras.Model):
                 self.add_loss(tf.nn.l2_loss(weight))
 
     def call(self, x, laplacian):
-
         value = x
         for layer in self.conv_layers:
             value = layer(value, laplacian)
@@ -99,7 +129,6 @@ class GraphConvolutionalNetwork(tf.keras.Model):
 
     def make_logs(self):
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        #TODO change name in folds
         train_log_dir = f"logs/gradient_tape/{self.network_name}_{current_time}/train"
         test_log_dir = f"logs/gradient_tape/{self.network_name}_{current_time}/test"
 
@@ -133,7 +162,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
 
         return  conf + tf.math.confusion_matrix(y, pred_classes, weights=mask)
 
-    def fit_cv_groups(self, data_zip, groups, positive_weight=1.0, epochs=3):
+    def fit_cv_groups(self, data_zip, groups, folds=5, positive_weight=1.0, epochs=3, restore_best=False):
         """
         Fits the model using group cross validation over `epochs` epochs
         (default 3).
@@ -143,10 +172,22 @@ class GraphConvolutionalNetwork(tf.keras.Model):
             List of (feats, targets, laplacians, masks)
         groups: iterable
             Group for each
-        positive_weight: float (default 1.0)
-        epochs: integer (default 3)
+        folds: int
+            Number of folds to use. Default 5.
+        positive_weight: float
+            Weight of positive class. Default 1.
+        epochs: integer
+            Number of epochs to fit each fold for. Default 3.
+        restore_best: bool
+            Whether to restore the best score weights after fitting all folds.
+            Default False.
+
+        Returns
+        ------
+        score: float
+            mean of each validation fold AUC
         """
-        group_kfold = sklearn.model_selection.GroupKFold(5)
+        group_kfold = sklearn.model_selection.GroupKFold(folds)
         feats, laplacians = data_zip[0], data_zip[2]
         # So far the weights haven't been initialized, and
         # saving weights will save 0 layers. We can force
@@ -155,6 +196,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         # And now we can save the starting point
         self.save_weights('init.h5')
         best_score = 0
+        all_scores = []
         original_name = self.network_name
         self.network_name += "0"
         for fold, (train_idx, test_idx) in enumerate(group_kfold.split(feats, groups=groups)):
@@ -178,6 +220,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
                 epochs=epochs,
                 verbose=False
             )
+            all_scores.append(score)
             if score > best_score:
                 logging.info("Best score achieved, saving weights..")
                 self.save_weights(f"best_{original_name}.h5")
@@ -185,6 +228,8 @@ class GraphConvolutionalNetwork(tf.keras.Model):
 
         logging.info(f"Best score is {best_score}, loading weights saved in best_{original_name}.h5")
         self.load_weights(f"best_{original_name}.h5")
+
+        return sum(all_scores)/folds
 
 
     def fit(self, train_zip, val_zip, positive_weight=1.0, epochs=3, verbose=False):
@@ -204,7 +249,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         auc: float
             best auc achieved by the model
         """
-        optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)
+        optimizer = tf.keras.optimizers.Adam(learning_rate=self.hyperparams["learning_rate"])
         loss_fn = tf.keras.losses.BinaryCrossentropy()
         train_loss, train_accuracy, train_recall, train_precision = self.setup_metrics("train")
         test_loss, test_accuracy, test_recall, test_precision = self.setup_metrics("test")
