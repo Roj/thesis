@@ -7,7 +7,7 @@ from thesispipeline import ThesisPipeline
 class ExperimentExecutor:
     def run_gcn(self, contacts=False, neighborhoods=False,
                 normalize_adj=False, epochs=2, filter_node_amount=None,
-                dist=3, negative_prob=0.5, hyperparameters=None):
+                dist=3, negative_prob=0.5, merged_neighborhood_size=1000, hyperparameters=None):
 
         thesis = ThesisPipeline()
 
@@ -41,12 +41,14 @@ class ExperimentExecutor:
 
         thesis.make_positive_weight()
         thesis.make_laplacians()
-        thesis.pad_matrices()
 
         if neighborhoods:
-            thesis.make_masks(pad_only=True)
-            thesis.run_cv_local_gcn(epochs=epochs, name=self.experiment_name)
+            thesis.merge_neighborhoods(merged_neighborhood_size)
+            #thesis.run_cv_local_gcn(epochs=epochs, name=self.experiment_name)
+            thesis.run_cv_gcn(epochs=epochs, name=self.experiment_name)
+
         else:
+            thesis.pad_matrices()
             thesis.make_masks()
             if hyperparameters is None:
                 thesis.run_cv_gcn(epochs=epochs, name=self.experiment_name)

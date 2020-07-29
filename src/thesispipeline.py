@@ -318,6 +318,68 @@ class ThesisPipeline:
         for i, (mask, n) in enumerate(zip(self.all_masks, self.nb_nodes_per_graph)):
             self.all_masks[i] = np.pad(mask, (0, self.nb_nodes - n)).astype(np.float32)
 
+    def merge_neighborhoods(self, max_nodes = 1000):
+        """Since neighborhoods are usually small in size, we can merge them into
+        fewer matrices speeding up computation. Laplacians are concatenated to be
+        block-diagonal, while features, targets and masks are concatenated accross
+        rows. Additionally, padding is done in this same method for simplicity.
+        All matrices end up having `max_nodes` rows."""
+        laplacians_concatenated = []
+        features_concatenated = []
+        targets_concatenated = []
+        masks_concatenated = []
+        groups_concatenated = []
+        max_nodes = 1000
+        num_processed = 0
+
+        while num_processed < len(self.all_laplacians):
+            indices, values, shape = self.all_laplacians[num_processed]
+            features = [self.all_features[num_processed]]
+            targets = [self.all_targets[num_processed]]
+            masks = [self.all_masks[num_processed]]
+            group = thesis.protein_groups[num_processed]
+
+            indices = [indices]
+            values = [values]
+            nodes = shape[0]
+
+            num_processed += 1
+            while (num_processed < len(self.all_laplacians)) \
+                and (group == self.protein_groups[num_processed]) \
+                and (nodes + self.all_laplacians[num_processed][2][0] < max_nodes):
+                idx, vals, shape = self.all_laplacians[num_processed]
+
+                indices.append(idx + nodes)
+                values.append(vals)
+                features.append(self.all_features[num_processed])
+                targets.append(self.all_targets[num_processed])
+                masks.append(self.all_masks[num_processed])
+
+                nodes += shape[0]
+                num_processed += 1
+
+            indices = np.concatenate(indices)
+            values = np.concatenate(values)
+            shape = (max_nodes, max_nodes) # "Padding" for sparse matrices
+
+            padding_amount = max_nodes-nodes
+
+            features = np.pad(np.concatenate(features), ((0, padding_amount), (0, 0)))
+            targets = np.pad(np.concatenate(targets), (0, padding_amount))
+            masks = np.pad(np.concatenate(masks), (0, padding_amount))
+
+            laplacians_concatenated.append((indices, values, shape))
+            features_concatenated.append(features)
+            targets_concatenated.append(targets)
+            masks_concatenated.append(masks)
+            groups_concatenated.append(group)
+
+        self.all_laplacians = laplacians_concatenated
+        self.all_features = features_concatenated
+        self.all_targets = targets_concatenated
+        self.all_masks = masks_concatenated
+        self.protein_groups = groups_concatenated
+
     def _prepare_tensors(self):
         feats = self.all_features
         supps = [tf.sparse.SparseTensor(indices, values.astype(np.float32), dense_shape)
@@ -325,6 +387,7 @@ class ThesisPipeline:
         targs = self.all_targets
         masks = self.all_masks
         return feats, targs, supps, masks
+
     def run_cv_gcn(self, epochs=40, name=""):
         """Prepare tensors and run GCN with Group K-Fold CV"""
         feats, targs, supps, masks = self._prepare_tensors()
