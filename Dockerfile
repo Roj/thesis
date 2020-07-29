@@ -2,6 +2,9 @@ FROM tensorflow/tensorflow:latest-gpu
 
 WORKDIR /thesis
 
+ENV http_proxy=http://proxy.fcen.uba.ar:8080
+ENV https_proxy=http://proxy.fcen.uba.ar:8080
+
 ADD requirements.txt /thesis
 
 RUN pip install -r requirements.txt
@@ -12,4 +15,4 @@ ADD src/ /thesis
 ADD names_groups.pkl /thesis
 ADD experiments /thesis/experiments
 
-CMD bash
+CMD python experimentexecutor.py
