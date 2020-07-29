@@ -9,6 +9,7 @@ import scipy.sparse as sp
 import pandas as pd
 import tensorflow as tf
 from gcn.gcn import Laplacian, sparse_to_tuple, GraphConvolutionalNetwork, LocalGCN
+from gcn.hyperparameterdetective import HyperparameterDetective
 
 class ThesisPipeline:
     def __init__(self):
@@ -317,28 +318,39 @@ class ThesisPipeline:
         for i, (mask, n) in enumerate(zip(self.all_masks, self.nb_nodes_per_graph)):
             self.all_masks[i] = np.pad(mask, (0, self.nb_nodes - n)).astype(np.float32)
 
-    def run_cv_gcn(self, epochs=40, name=""):
-        """Prepare tensors and run GCN with Group K-Fold CV"""
-        tf.data.Dataset.from_tensor_slices = lambda a: a
+    def _prepare_tensors(self):
         feats = self.all_features
         supps = [tf.sparse.SparseTensor(indices, values.astype(np.float32), dense_shape)
                     for indices, values, dense_shape in self.all_laplacians]
         targs = self.all_targets
         masks = self.all_masks
+        return feats, targs, supps, masks
+    def run_cv_gcn(self, epochs=40, name=""):
+        """Prepare tensors and run GCN with Group K-Fold CV"""
+        feats, targs, supps, masks = self._prepare_tensors()
+
         model = GraphConvolutionalNetwork(feats[0].shape, 1, self.all_laplacians[0][2], name=name)
         model.fit_cv_groups((feats, targs, supps, masks), self.protein_groups,
                    positive_weight=self.fair_positive_weight, epochs=epochs)
         return model
 
+    def run_hypersearch_gcn(self, hyperparameter_domains, prefix, epochs=40, name=""):
+        """Run hyperparameter detective with given parameter domains. Prefix must be
+        specified."""
+        feats, targs, supps, masks = self._prepare_tensors()
+        detective = HyperparameterDetective(
+            f"logs/{prefix}", name, hyperparameter_domains,
+            feats[0].shape, 1, self.all_laplacians[0][2],
+            name=name
+        )
+        detective.search((feats, targs, supps, masks), self.protein_groups,
+                         positive_weight=self.fair_positive_weight, epochs=epochs)
+
     def run_cv_local_gcn(self, epochs=40, name=""):
         """Prepare tensors and run LocalGCN with Group K-Fold CV"""
-        tf.data.Dataset.from_tensor_slices = lambda a: a
-        feats = self.all_features
-        supps = [tf.sparse.SparseTensor(indices, values.astype(np.float32), dense_shape)
-                    for indices, values, dense_shape in self.all_laplacians]
-        targs = self.all_targets
-        masks = self.all_masks
+        feats, targs, supps, masks = self._prepare_tensors()
         last_neighborhood = self.last_neighborhood
+
         model = LocalGCN(feats[0].shape, 1, self.all_laplacians[0][2], name=name)
         model.fit_cv_groups((feats, targs, supps, masks, last_neighborhood), self.protein_groups,
                 positive_weight=self.fair_positive_weight, epochs=epochs)

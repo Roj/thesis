@@ -1,12 +1,14 @@
 import yaml
 import logging
 import pathlib
+import argparse
 from thesispipeline import ThesisPipeline
 
 class ExperimentExecutor:
     def run_gcn(self, contacts=False, neighborhoods=False,
                 normalize_adj=False, epochs=2, filter_node_amount=None,
-                dist=3, negative_prob=0.5):
+                dist=3, negative_prob=0.5, hyperparameters=None):
+
         thesis = ThesisPipeline()
 
         if contacts:
@@ -46,7 +48,11 @@ class ExperimentExecutor:
             thesis.run_cv_local_gcn(epochs=epochs, name=self.experiment_name)
         else:
             thesis.make_masks()
-            thesis.run_cv_gcn(epochs=epochs, name=self.experiment_name)
+            if hyperparameters is None:
+                thesis.run_cv_gcn(epochs=epochs, name=self.experiment_name)
+            else:
+                thesis.run_hypersearch_gcn(hyperparameters, f"detective_{self.experiment_name}",
+                                           epochs=epochs,name=self.experiment_name)
 
     def run_xgb(self, contacts=False, steps=3, filter_node_amount=None):
         thesis = ThesisPipeline()
@@ -89,13 +95,21 @@ class ExperimentExecutor:
         self.model(**self.config)
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run experiment pipelines.")
+    parser.add_argument("--experiment", dest="experiment", default=None)
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, filename="experiment_executor.log")
     logger = logging.getLogger()
-
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    for filename in pathlib.Path("experiments").glob("*.yml"):
 
-        if "xgb" in str(filename) or filename.stem in ["simple_gcn", "normalize_gcn", "neighborhood_gcn"]:
+    files = pathlib.Path("experiments").glob("*.yml")
+    if args.experiment is not None:
+        files = [pathlib.Path(f"experiments/{args.experiment}.yml")]
+
+    for filename in files:
+        print(f"Processing {filename.stem}")
+        if "xgb" in str(filename):# or filename.stem in ["simple_gcn", "normalize_gcn", "neighborhood_gcn"]:
             print(f"Skipping {filename}")
             continue
         # Restart logger with a new log file

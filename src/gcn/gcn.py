@@ -1,9 +1,14 @@
 import scipy.sparse as sp
 import numpy as np
-import tensorflow as tf
 import datetime
 import logging
-from tensorflow.keras import layers
+import warnings
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    import tensorflow as tf
+    from tensorflow.keras import layers
+
 import sklearn.model_selection
 from neighborhooditerator import NeighborhoodIterator
 import progressbar
