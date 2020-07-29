@@ -337,7 +337,7 @@ class ThesisPipeline:
             features = [self.all_features[num_processed]]
             targets = [self.all_targets[num_processed]]
             masks = [self.all_masks[num_processed]]
-            group = thesis.protein_groups[num_processed]
+            group = self.protein_groups[num_processed]
 
             indices = [indices]
             values = [values]
