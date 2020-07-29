@@ -1,0 +1,8 @@
+model: gcn
+filter_node_amount: 1000
+epochs: 40
+hyperparameters:
+  num_layers: [1,2,3,4,5,6]
+  learning_rate: [0.0001, 0.1]
+  num_filters: [16,32,64]
+  batch_normalization: [False, True]
