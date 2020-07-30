@@ -45,16 +45,15 @@ class ExperimentExecutor:
         if neighborhoods:
             thesis.merge_neighborhoods(merged_neighborhood_size)
             #thesis.run_cv_local_gcn(epochs=epochs, name=self.experiment_name)
-            thesis.run_cv_gcn(epochs=epochs, name=self.experiment_name)
-
         else:
             thesis.pad_matrices()
             thesis.make_masks()
-            if hyperparameters is None:
-                thesis.run_cv_gcn(epochs=epochs, name=self.experiment_name)
-            else:
-                thesis.run_hypersearch_gcn(hyperparameters, f"detective_{self.experiment_name}",
-                                           epochs=epochs,name=self.experiment_name)
+
+        if hyperparameters is None:
+            thesis.run_cv_gcn(epochs=epochs, name=self.experiment_name)
+        else:
+            thesis.run_hypersearch_gcn(hyperparameters, f"detective_{self.experiment_name}",
+                                       epochs=epochs,name=self.experiment_name)
 
     def run_xgb(self, contacts=False, steps=3, filter_node_amount=None):
         thesis = ThesisPipeline()
