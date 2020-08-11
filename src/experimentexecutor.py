@@ -6,8 +6,10 @@ from thesispipeline import ThesisPipeline
 
 class ExperimentExecutor:
     def run_gcn(self, contacts=False, neighborhoods=False,
-                normalize_adj=False, epochs=2, filter_node_amount=None,
-                dist=3, negative_prob=0.5, merged_neighborhood_size=1000, hyperparameters=None):
+                normalize_adj=False, normalize_l2_features=False,
+                epochs=2, filter_node_amount=None,
+                dist=3, negative_prob=0.5, merged_neighborhood_size=1000,
+                simple_laplacian=False, hyperparameters=None):
 
         thesis = ThesisPipeline()
 
@@ -24,7 +26,7 @@ class ExperimentExecutor:
         if not contacts:
             thesis.remove_interior_nodes()
 
-        thesis.make_features()
+        thesis.make_features(normalize=normalize_l2_features)
         thesis.make_adjacency_matrices()
 
         if normalize_adj:
@@ -40,7 +42,10 @@ class ExperimentExecutor:
             thesis.make_neighborhoods(dist=dist, negative_prob=negative_prob, verbose=1)
 
         thesis.make_positive_weight()
-        thesis.make_laplacians()
+        if simple_laplacian:
+            thesis.make_simple_laplacians()
+        else:
+            thesis.make_laplacians()
 
         if neighborhoods:
             thesis.merge_neighborhoods(merged_neighborhood_size)

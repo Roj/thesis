@@ -8,6 +8,7 @@ import numpy as np
 import scipy.sparse as sp
 import pandas as pd
 import tensorflow as tf
+import sklearn.preprocessing
 from gcn.gcn import Laplacian, SimpleLaplacian, sparse_to_tuple, GraphConvolutionalNetwork, LocalGCN
 from gcn.hyperparameterdetective import HyperparameterDetective
 
@@ -91,7 +92,7 @@ class ThesisPipeline:
                      f"({graphs_missing_data/len(self.graphs)*100}%)\n"
                      f"Remaining graphs: {len(self.graphs)-graphs_missing_data}")
         self.graphs = [graph for i, graph in enumerate(self.graphs) if not has_missing_data[i]]
-    def make_features(self):
+    def make_features(self, normalize=False):
         """Make features from graph data
             - one shot for resname (including UNK!)
             - bfactor and coord as usual"""
@@ -113,7 +114,8 @@ class ThesisPipeline:
                     features[i, num_amino+1:num_amino+4] = node["coord"]
                 else:
                     features[i, num_amino+1:num_amino+4] = node["x"], node["y"], node["z"]
-
+            if normalize:
+                features = sklearn.preprocessing.normalize(features)
             self.all_features.append(features)
 
     def propagate_features_graph(self, steps=3):
