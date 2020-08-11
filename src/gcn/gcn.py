@@ -25,6 +25,25 @@ class Laplacian:
         d_mat_inv_sqrt = sp.diags(d_inv_sqrt)
         return adj.dot(d_mat_inv_sqrt).transpose().dot(d_mat_inv_sqrt).tocoo()
 
+class SimpleLaplacian:
+    @staticmethod
+    def from_adjacency(adj):
+        adj = adj + sp.eye(adj.shape[0])
+        D = sp.diags(np.array(adj.sum(1)).flatten())
+        return (D - adj).tocoo()
+
+class RandomWalkLaplacian:
+    @staticmethod
+    def from_adjacency(adj, step = 1):
+        adj = adj + sp.eye(adj.shape[0])
+        # Row-normalize adjacency matrix
+        adj = sp.coo_matrix(adj)
+        rowsum = np.array(adj.sum(1))
+        d_inv = np.power(rowsum, -1).flatten()
+        d_inv[np.isinf(d_inv)] = 0.
+        d_mat_inv = sp.diags(d_inv)
+        return adj.dot(d_mat_inv).transpose().tocoo()
+
 
 def sparse_to_tuple(sparse_mx):
     """Convert sparse matrix to tuple representation."""

@@ -8,7 +8,7 @@ import numpy as np
 import scipy.sparse as sp
 import pandas as pd
 import tensorflow as tf
-from gcn.gcn import Laplacian, sparse_to_tuple, GraphConvolutionalNetwork, LocalGCN
+from gcn.gcn import Laplacian, SimpleLaplacian, sparse_to_tuple, GraphConvolutionalNetwork, LocalGCN
 from gcn.hyperparameterdetective import HyperparameterDetective
 
 class ThesisPipeline:
@@ -285,6 +285,10 @@ class ThesisPipeline:
 
     def make_laplacians(self):
         self.all_laplacians = [sparse_to_tuple(Laplacian.from_adjacency(adj))
+            for adj in self.all_adj]
+
+    def make_simple_laplacians(self):
+        self.all_laplacians = [sparse_to_tuple(SimpleLaplacian.from_adjacency(adj))
             for adj in self.all_adj]
 
     def pad_matrices(self):
