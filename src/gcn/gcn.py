@@ -91,6 +91,29 @@ class LaplacianConvolution(layers.Layer):
         masked = tf.sparse.sparse_dense_matmul(laplacian, transformed)
         return self.activation(masked + self.conv_bias)
 
+class NormalizedLaplacianConvolution(LaplacianConvolution):
+    def call(self, x, laplacian, node_mask):
+        """Calculate a laplacian convolution and then use batch normalization
+        on the present nodes using node_mask."""
+        transformed = tf.matmul(x, self.conv_weights)
+        convolved = tf.sparse.sparse_dense_matmul(laplacian, transformed)
+        only_present_nodes = tf.boolean_mask(convolved, tf.math.equal(node_mask, 1))
+        means = tf.expand_dims(tf.math.reduce_mean(only_present_nodes, axis=0), 0)
+        stds = tf.expand_dims(tf.math.reduce_std(only_present_nodes, axis=0), 0)
+        node_mask_expanded = tf.expand_dims(node_mask, 1)
+
+        # Normalize each element by subtracting its column mean, dividing by its column
+        # stdev and multiplying by its row mask.
+        normalized = tf.nn.batch_normalization(
+            convolved,
+            means,
+            stds,
+            None,
+            node_mask_expanded,
+            variance_epsilon=0.001
+        )
+
+
 class GraphConvolutionalNetwork(tf.keras.Model):
     default_hyperparams = {
         "num_layers": 1,
@@ -131,23 +154,30 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         # Set up layers
         self.conv_layers = []
         hidden_dim = hyperparams["num_filters"]
+        layer = LaplacianConvolution
+        if hyperparams["batch_normalization"]
+            layer = NormalizedLaplacianConvolution
+
         for i in range(hyperparams["num_layers"]):
             if i == 0:
-                self.conv_layers.append(LaplacianConvolution(hidden_dim, input_shape=input_shape))
+                self.conv_layers.append(layer(hidden_dim, input_shape=input_shape))
             else:
-                self.conv_layers.append(LaplacianConvolution(hidden_dim))
+                self.conv_layers.append(layer(hidden_dim))
 
-        self.conv_layers.append(LaplacianConvolution(output_dim, activation="sigmoid"))
+        self.conv_layers.append(layer(output_dim, activation="sigmoid"))
         self.network_name = kwargs.get("name", "")
 
         for layer in self.layers:
             for weight in layer.weights:
                 self.add_loss(tf.nn.l2_loss(weight))
 
-    def call(self, x, laplacian):
+    def call(self, x, laplacian, mask):
         value = x
         for layer in self.conv_layers:
-            value = layer(value, laplacian)
+            if not self.hyperparams["batch_normalization"]:
+                value = layer(value, laplacian)
+            else:
+                value = layer(value, laplacian, mask)
 
         return value
 
@@ -212,11 +242,11 @@ class GraphConvolutionalNetwork(tf.keras.Model):
             mean of each validation fold AUC
         """
         group_kfold = sklearn.model_selection.GroupKFold(folds)
-        feats, laplacians = data_zip[0], data_zip[2]
+        feats, laplacians, masks = data_zip[0], data_zip[2], data_zip[3]
         # So far the weights haven't been initialized, and
         # saving weights will save 0 layers. We can force
         # initialization like so:
-        _ = self(feats[0], laplacians[0])
+        _ = self(feats[0], laplacians[0], masks[0])
         # And now we can save the starting point
         self.save_weights('init.h5')
         best_score = 0
@@ -293,7 +323,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
                 if step == epoch == 0 and verbose: logging.info(weighted_mask)
 
                 with tf.GradientTape() as tape:
-                    ỹ = self(x, L)
+                    ỹ = self(x, L, mask)
                     # loss requires (batch_size, num_classes)
                     loss = loss_fn(tf.reshape(y, [batch_size, 1]), ỹ, sample_weight=weighted_mask)
 
@@ -313,7 +343,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
             for step, (x, y, L, mask) in enumerate(zip(*val_zip)):
                 batch_size = mask.shape[0]
                 weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
-                ỹ = self(x, L)
+                ỹ = self(x, L, mask)
                 loss = loss_fn(tf.reshape(y, [batch_size, 1]), ỹ, sample_weight=weighted_mask)
                 ỹ = tf.reshape(ỹ, [-1])
 
@@ -385,7 +415,7 @@ class LocalGCN(GraphConvolutionalNetwork):
                     while last_neigh == 0:
                         weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
                         if step == epoch == 0 and verbose: logging.info(weighted_mask)
-                        ỹ = self(x, L)
+                        ỹ = self(x, L, mask)
                         masks_concatenated.append(mask)
                         weighted_masks_concatenated.append(weighted_mask)
                         ỹ_concatenated.append(ỹ)
@@ -423,7 +453,7 @@ class LocalGCN(GraphConvolutionalNetwork):
                 y_concatenated = []
                 while last_neigh == 0:
                     weighted_mask = tf.multiply(mask, y*positive_weight + (1-y))
-                    ỹ = self(x, L)
+                    ỹ = self(x, L, mask)
                     masks_concatenated.append(mask)
                     weighted_masks_concatenated.append(weighted_mask)
                     ỹ_concatenated.append(ỹ)
