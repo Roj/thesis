@@ -2,6 +2,7 @@ import yaml
 import logging
 import pathlib
 import argparse
+import pandas as pd
 from thesispipeline import ThesisPipeline
 
 class ExperimentExecutor:
@@ -60,7 +61,7 @@ class ExperimentExecutor:
             thesis.run_hypersearch_gcn(hyperparameters, f"detective_{self.experiment_name}",
                                        epochs=epochs,name=self.experiment_name)
 
-    def run_xgb(self, contacts=False, steps=3, filter_node_amount=None):
+    def run_xgb(self, contacts=False, steps=3, filter_node_amount=None, iters=3, **kwargs):
         thesis = ThesisPipeline()
         if contacts:
             thesis.load_data(graphs_folder="graphs/contacts/", names_groups_file="names_groups.pkl")
@@ -70,15 +71,19 @@ class ExperimentExecutor:
 
         thesis.make_protein_groups()
         thesis.check_protein_groups()
-        thesis.remove_interior_nodes()
+        if not contacts:
+            thesis.remove_interior_nodes()
 
-        thesis.propagate_features_graph(steps=3)
+        thesis.propagate_features_graph(steps=steps)
         thesis.make_diffused_features() #definitely not
         thesis.make_targets() # we can probably use this
         if filter_node_amount is not None:
             thesis.filter_by_node_amount(amount=filter_node_amount)
 
-        thesis.run_cv_hypersearch_xgb(3)
+        clf, search = thesis.run_cv_hypersearch_xgb(iters)
+        logging.info(search.cv_results_)
+        logging.info(pd.DataFrame(search.cv_results_))
+        logging.info(f"Best score - {search.best_score_}; Best params - {search.best_params_}")
 
     def __init__(self, filename):
         self.experiment_name = filename.stem
@@ -115,7 +120,7 @@ if __name__ == "__main__":
 
     for filename in files:
         print(f"Processing {filename.stem}")
-        if "xgb" in str(filename):# or filename.stem in ["simple_gcn", "normalize_gcn", "neighborhood_gcn"]:
+        if False:#"xgb" in str(filename):# or filename.stem in ["simple_gcn", "normalize_gcn", "neighborhood_gcn"]:
             print(f"Skipping {filename}")
             continue
         # Restart logger with a new log file

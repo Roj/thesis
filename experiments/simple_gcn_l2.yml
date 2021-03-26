@@ -1,0 +1,4 @@
+model: gcn
+filter_node_amount: 1000
+epochs: 40
+normalize_l2_features: true

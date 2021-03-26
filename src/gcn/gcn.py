@@ -76,6 +76,7 @@ class LaplacianConvolution(layers.Layer):
         super(LaplacianConvolution, self).__init__(**kwargs)
 
     def build(self, input_shape):
+        logging.info("Building with input_shape %s", input_shape)
         self.conv_weights = self.add_weight(
             name='convweights', shape=(input_shape[1], self.output_dim),
             initializer='uniform', trainable=True)
@@ -93,11 +94,10 @@ class LaplacianConvolution(layers.Layer):
 
 class NormalizedLaplacianConvolution(LaplacianConvolution):
     def call(self, x, laplacian, node_mask):
-        """Calculate a laplacian convolution and then use batch normalization
-        on the present nodes using node_mask."""
-        transformed = tf.matmul(x, self.conv_weights)
-        convolved = tf.sparse.sparse_dense_matmul(laplacian, transformed)
-        only_present_nodes = tf.boolean_mask(convolved, tf.math.equal(node_mask, 1))
+        """Use batch normalization on the present nodes using node_mask
+        and then calculate the convolution."""
+
+        only_present_nodes = tf.boolean_mask(x, tf.math.equal(node_mask, 1))
         means = tf.expand_dims(tf.math.reduce_mean(only_present_nodes, axis=0), 0)
         stds = tf.expand_dims(tf.math.reduce_std(only_present_nodes, axis=0), 0)
         node_mask_expanded = tf.expand_dims(node_mask, 1)
@@ -105,13 +105,16 @@ class NormalizedLaplacianConvolution(LaplacianConvolution):
         # Normalize each element by subtracting its column mean, dividing by its column
         # stdev and multiplying by its row mask.
         normalized = tf.nn.batch_normalization(
-            convolved,
+            x,
             means,
             stds,
             None,
             node_mask_expanded,
             variance_epsilon=0.001
         )
+
+        # And now just proceed as a laplacian layer:
+        return super().call(normalized, laplacian)
 
 
 class GraphConvolutionalNetwork(tf.keras.Model):
@@ -155,7 +158,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         self.conv_layers = []
         hidden_dim = hyperparams["num_filters"]
         layer = LaplacianConvolution
-        if hyperparams["batch_normalization"]
+        if hyperparams["batch_normalization"]:
             layer = NormalizedLaplacianConvolution
 
         for i in range(hyperparams["num_layers"]):
@@ -246,8 +249,10 @@ class GraphConvolutionalNetwork(tf.keras.Model):
         # So far the weights haven't been initialized, and
         # saving weights will save 0 layers. We can force
         # initialization like so:
+        logging.info("Initializing GCN with %s, %s, %s", feats[0], laplacians[0], masks[0])
         _ = self(feats[0], laplacians[0], masks[0])
         # And now we can save the starting point
+        logging.info("And saving starting point.")
         self.save_weights('init.h5')
         best_score = 0
         all_scores = []
@@ -266,7 +271,7 @@ class GraphConvolutionalNetwork(tf.keras.Model):
                 [seq[i] for i in test_idx]
                 for seq in data_zip
             ]
-
+            logging.info("Fitting fold %s", fold)
             score = self.fit(
                 train_zip,
                 test_zip,

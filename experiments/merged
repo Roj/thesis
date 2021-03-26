@@ -1,0 +1,46 @@
+model: gcn
+contacts: true
+epochs: 40
+model: gcn
+filter_node_amount: 1000
+epochs: 40
+simple_laplacian: True
+hyperparameters:
+  num_layers: [2,3,4,5,6]
+  learning_rate: [0.001, 0.0010001]
+  num_filters: [16,32,64,128]
+  batch_normalization: [False, True]
+model: gcn
+epochs: 40
+neighborhoods: true
+dist: 3
+negative_prob: 0.5
+merged_neighborhood_size: 1000
+hyperparameters:
+  num_layers: [1,2,3,4,5,6]
+  learning_rate: [0.001, 0.0010001]
+  num_filters: [16,32,64]
+  batch_normalization: [False, True]
+model: gcn
+filter_node_amount: 1000
+epochs: 40
+normalize_adj: true
+model: gcn
+filter_node_amount: 1000
+epochs: 40
+hyperparameters:
+  num_layers: [1,2,3,4,5,6]
+  learning_rate: [0.0001, 0.1]
+  num_filters: [16,32,64]
+  batch_normalization: [False, True]model: gcn
+filter_node_amount: 1000
+epochs: 40
+normalize_l2_features: true
+model: gcn
+filter_node_amount: 1000
+epochs: 40
+hyperparameters:
+  num_layers: [2,3,4,5,6]
+  learning_rate: [0.001, 0.0010001]
+  num_filters: [16,32,64,128]
+  batch_normalization: [False, True]

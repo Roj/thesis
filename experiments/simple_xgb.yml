@@ -1,3 +1,4 @@
 model: xgb
 filter_node_amount: 1000
 epochs: 40
+steps: 3

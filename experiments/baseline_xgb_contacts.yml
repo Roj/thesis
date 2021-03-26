@@ -2,4 +2,4 @@ model: xgb
 contacts: true
 filter_node_amount: 1000
 epochs: 3
-iters: 20
+steps: 0
